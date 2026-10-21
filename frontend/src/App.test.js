@@ -6,18 +6,20 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-test('loads USD rates on mount and renders them', async () => {
-  const fetchMock = vi.fn().mockResolvedValue({
+const ratesSnapshot = {
+  baseCurrency: 'USD',
+  timestamp: '2026-10-21T10:00:00+00:00',
+  rates: [
+    { currency: 'EUR', rate: 0.92 },
+    { currency: 'GBP', rate: 0.79 },
+  ],
+}
+
+test('loads USD rates on mount and renders them above the alerts panel', async () => {
+  const fetchMock = vi.fn(async (url) => ({
     ok: true,
-    json: async () => ({
-      baseCurrency: 'USD',
-      timestamp: '2026-10-21T10:00:00+00:00',
-      rates: [
-        { currency: 'EUR', rate: 0.92 },
-        { currency: 'GBP', rate: 0.79 },
-      ],
-    }),
-  })
+    json: async () => (url === '/api/alerts' ? [] : ratesSnapshot),
+  }))
   vi.stubGlobal('fetch', fetchMock)
 
   const wrapper = mount(App)
@@ -27,4 +29,5 @@ test('loads USD rates on mount and renders them', async () => {
   const rows = wrapper.findAll('tbody tr').map((row) => row.text())
   expect(rows).toEqual(['EUR0.92', 'GBP0.79'])
   expect(wrapper.text()).toContain('Last updated:')
+  expect(wrapper.find('h2').text()).toBe('Alerts')
 })

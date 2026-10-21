@@ -1,5 +1,6 @@
 <script setup>
 import { onMounted, ref } from 'vue'
+import AlertsPanel from './components/AlertsPanel.vue'
 
 const baseCurrency = ref('USD')
 const currencies = ref(['USD'])
@@ -59,6 +60,8 @@ onMounted(loadRates)
     </table>
     <p>Last updated: {{ new Date(snapshot.timestamp).toLocaleString() }}</p>
   </template>
+
+  <AlertsPanel :currencies="currencies" />
 </template>
 
 <style scoped>

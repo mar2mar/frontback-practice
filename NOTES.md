@@ -246,6 +246,19 @@ All planned endpoints are implemented.
   - The `POST` handler catches `ArgumentException`, which also covers `ArgumentOutOfRangeException`, and returns a `400` ProblemDetails. This reuses the existing exception behavior; there's no result-type framework.
 - **Not used:** CQRS, MediatR, controllers or mapping libraries.
 - **Frontend:** Vue 3 and Vite (JavaScript). The Vite dev proxy forwards `/api` to the backend, so no CORS setup is needed. Components call `fetch` directly with relative `/api` URLs. There's no router, store, API client or UI library.
+  - `App.vue`: the rates view. It also renders `AlertsPanel` below the rates table and passes its `currencies` list (base + quote currencies from the latest rates response) as a prop.
+  - `components/AlertsPanel.vue`:
+    - Loads `GET /api/alerts` on mount.
+    - Shows a table of pair, target, created time and status ("Active" or "Triggered {time}"), or "No alerts yet."
+    - Has a create form: base and quote dropdowns, plus a target number input (`step 0.000001`, `min 0.000001`).
+      - "Add alert" is enabled only when at least two currencies are available and the base and quote are valid options that differ.
+      - When the currency list changes, an invalid selection is replaced: the base with the first option, the quote with the first option that differs from the base.
+      - Hints: "Alerts can be created once exchange rates have loaded." when there are fewer than two currencies, and "Choose two different currencies." when base and quote match.
+    - Has a Delete button on each row.
+    - After a successful create or delete, it reloads the list from the server.
+    - Error messages show the backend's ProblemDetails `detail` when there is one. A `404` on delete shows "That alert no longer exists." and reloads the list.
+    - Controls are disabled while a request is running.
+    - It copies the rates view's table, `.controls` and `.error` styles, because scoped styles don't apply to child components.
 
 ### Persistence: SQLite and EF Core
 
@@ -326,6 +339,9 @@ Rates aren't stored in the database. Evaluation always uses the provider's curre
 | 33 | `EvaluateAsync` fetches one snapshot per distinct base currency, one base at a time | Accepted (adjusted by the user) | Final design: two phases. Fetch every snapshot first, then evaluate and save in active-alert order. That way a provider failure saves nothing. The AI's original version fetched lazily inside the loop, which could leave alerts triggered but unreported. Parallel calls aren't needed for the in-process fake provider. |
 | 34 | Provider exceptions are not caught in `EvaluateAsync` | Accepted | A failing provider is a real error, not a missing rate (which is skipped). Catching it would hide outages. Because of decision 33, it fails before anything is saved. |
 | 35 | Frontend tests stub `fetch` with `vi.stubGlobal` (no mock-server library), and test files sit next to their component (`src/*.test.js`) | Accepted | Components already call `fetch` directly, so stubbing it is the smallest seam. Test files next to their component need no extra configuration and are excluded from the bundle automatically. |
+| 36 | `AlertsPanel` copies the rates view's table, `.controls` and `.error` styles in its own scoped `<style>` | Accepted | Keeps the existing look without changing `App.vue`'s styles. A shared stylesheet would avoid the duplication but changes the rates view. |
+| 37 | The `AlertsPanel` tests' `fetch` stub returns responses in call order | Accepted | Simplest stub, and the order of calls is part of the behavior being tested (create → reload, delete → reload). The trade-off: tests break if the call order changes. |
+| 38 | A `404` on delete shows "That alert no longer exists." and still reloads the list | Accepted | The alert is already gone, for example deleted in another tab, so refreshing shows the true state. |
 
 ## Testing Strategy
 
@@ -337,7 +353,13 @@ Rates aren't stored in the database. Evaluation always uses the provider's curre
 - **Frontend tests:**
   - Vitest 5, `@vue/test-utils` 2 and jsdom; `npm test` runs `vitest run` (single run, no watch mode).
   - Components are mounted with `fetch` stubbed through `vi.stubGlobal`, and `flushPromises()` waits for the async calls.
-  - So far there's one smoke test, `src/App.test.js`: the rates view requests `/api/rates?base=USD` on mount and renders the returned rates and the "Last updated" line.
+  - `src/App.test.js`, a smoke test: the rates view requests `/api/rates?base=USD` on mount, renders the returned rates and the "Last updated" line, and shows the alerts panel. Its `fetch` stub answers based on the requested URL.
+  - `src/components/AlertsPanel.test.js`, 5 tests. Its `fetch` stub returns responses in call order.
+    - The list renders pair, target and Active/Triggered status.
+    - Creation is disabled, with a hint, while only one currency is available. Once the full list arrives, it picks two different valid currencies and enables the button.
+    - Create sends the expected `POST` JSON and reloads the list.
+    - A rejected create shows the ProblemDetails `detail` and doesn't reload.
+    - Delete sends `DELETE /api/alerts/{id}`, reloads, and shows the empty state.
 - **Evaluate endpoint tests:** `EvaluateEndpointTests` creates a new app and SQLite database for each test, with a deterministic `StubExchangeRateProvider` (USD → EUR 0.92, GBP 0.79, JPY 150) in place of the random fake provider. It covers:
   - no alerts → `[]`;
   - a triggered alert returned with its real `id` and `triggeredAt`;
@@ -365,6 +387,7 @@ Rates aren't stored in the database. Evaluation always uses the provider's curre
 | 2026-10-21 | Evaluation step 3: `AlertService.EvaluateAsync` (TDD) | Red: 6 of 6 new service tests failed with `NotImplementedException`. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 61 of 61 passed. Review refinement (two phases): the new provider-failure test failed against the one-loop version (`Assert.Empty() Failure`: the USD alert was already saved when the EUR fetch threw). After the refactor, `dotnet build` had 0 warnings and 0 errors, and `dotnet test` passed 62 of 62, with the existing order and one-call-per-base tests unchanged. |
 | 2026-10-21 | Evaluation step 4: `POST /api/alerts/evaluate` (TDD) | Red: 5 of 5 new HTTP tests failed with `405 MethodNotAllowed`, because no `POST` handler existed. The path matched the `DELETE /api/alerts/{id:int}` pattern, so ASP.NET Core reported the wrong method instead of 404. The 6 existing CRUD endpoint tests still passed after moving `AlertResponse` to its own file. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 67 of 67 passed. The development database was unchanged and no temporary test files were left behind. Manual check with the random fake provider and a throwaway database: evaluate with no alerts → `[]`; then alerts EUR 0.5 and GBP 5 → evaluate returned only EUR; evaluate again → `[]`; `GET` showed EUR's `triggeredAt` unchanged and GBP still active. |
 | 2026-10-21 | Frontend testing setup | Installed `vitest` 5.0.5, `@vue/test-utils` 2.5.1 and `jsdom` 30.1.3 as dev dependencies. `npm audit`: 0 vulnerabilities, with no peer-dependency warnings. The lockfile also moved `vite` from 8.3.4 to 8.3.5, within the existing range. `npm test`: 1 of 1 passed. This smoke test describes existing behavior, so it passed on first run with no red phase. `npm run build` succeeded, with output identical to before, so the test files aren't bundled. |
+| 2026-10-21 | Frontend alert management (list, create, delete) | Red: against an empty `AlertsPanel.vue`, 4 of 4 new tests failed (`/api/alerts` not called; form and buttons not found). Green: 5 of 5 passed. After adding the panel to `App.vue`, the smoke test failed as expected, because its stub returned rates JSON for `/api/alerts` too. After changing the stub to answer by URL, 5 of 5 passed. `npm run build` succeeded. Manual check through the Vite proxy (`:5173`) with real HTTP and a throwaway database: the page and `AlertsPanel.vue` were served; `GET` → `[]`; `POST` → 201; an invalid `POST` → 400 with `detail`; `DELETE` → 204; `GET` → `[]`. Not checked by hand in a browser. Review correction (creation needs two valid, different currencies): the new test failed first (submit button not disabled with only `USD`). Then `npm test` passed 6 of 6, `npm run build` succeeded, and `dotnet test` passed 67 of 67 (backend unchanged). |
 
 ## Known Limitations
 
@@ -389,7 +412,10 @@ Rates aren't stored in the database. Evaluation always uses the provider's curre
 - `RateAlert` checks the format of currency codes, but not whether a code is a real ISO 4217 currency (e.g. `ABC` is accepted). The service will check that currencies are supported.
 - Evaluation only happens when requested. Alerts don't trigger on their own.
 - There are no users, authentication or notifications.
-- Frontend tests cover only a smoke test of the rates view so far. Alert UI is not built yet.
+- The frontend can list, create and delete alerts, but has no Evaluate button yet.
+- The alert currency dropdowns come from the rates view. Until rates have loaded, or if loading them fails, only `USD` is available. "Add alert" is then disabled, with the hint "Alerts can be created once exchange rates have loaded." The rates view's Refresh button can retry.
+- Backend error messages are shown as-is, including .NET's `(Parameter '…')` suffix.
+- The alert UI has been checked with component tests and with real HTTP calls through the Vite proxy, but not by hand in a browser.
 
 ## Future Improvements
 
@@ -424,3 +450,4 @@ To be filled in manually. Claude does not estimate or record time.
 | 2026-10-21 | Evaluation step 3: `AlertService.EvaluateAsync` | |
 | 2026-10-21 | Evaluation step 4: `POST /api/alerts/evaluate` | |
 | 2026-10-21 | Frontend testing setup | |
+| 2026-10-21 | Frontend alert management | |

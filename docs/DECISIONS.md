@@ -205,3 +205,18 @@ Important architectural decisions for RateWatch, and AI suggestions that were ac
 - **Source:**
   - Adding Vitest, Vue Test Utils and jsdom was the user's decision (frontend plan, Commit 1).
   - Stubbing `fetch` and putting tests next to components are AI choices, accepted by the user.
+
+### Alert management UI in one `AlertsPanel` component
+- **Decision:**
+  - A single `components/AlertsPanel.vue`, rendered below the rates table, handles listing, creating and deleting alerts. It calls `fetch` directly, with no API client, store or UI library.
+  - Currency options come from `App.vue`'s existing `currencies`, passed as a prop.
+  - After every successful create or delete, the list is reloaded with `GET /api/alerts` instead of being patched locally.
+  - Backend ProblemDetails `detail` messages are shown to the user.
+- **Reason:**
+  - It keeps the rates view untouched, and keeps the UI consistent with the server.
+  - The currency options are always ones the backend supports, because they come from its rates response.
+- **Trade-offs:**
+  - One extra request after each change.
+  - Table and error styles are copied from the rates view, because scoped styles don't apply to child components.
+  - Until rates load, only `USD` is available, so creation is disabled and a hint is shown. Creation is only enabled with two valid, different currencies, and selections are corrected automatically when the currency list changes.
+- **Source:** User specification (frontend Commit 2). The user added the two-currency rule during review. The copied styles, the fetch stub that answers in call order, and the 404 delete handling are AI choices, accepted by the user.
