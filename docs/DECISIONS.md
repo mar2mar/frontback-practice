@@ -131,4 +131,4 @@ Important architectural decisions for RateWatch, and AI suggestions that were ac
   - `ArgumentException` from the entity or the service becomes a `400` ProblemDetails.
   - Responses return `RateAlert` directly.
 - **Reason:** Three small endpoints don't justify controllers, endpoint classes, a result framework or DTO mapping. Scoped lifetimes match `AppDbContext`.
-- **Source:** User requirements (Minimal APIs, scoped DI, existing exception behavior). The handler details are AI choices, pending user review.
+- **Source:** User requirements (Minimal APIs, scoped DI, existing exception behavior). The handler details are AI choices, accepted by the user.

@@ -195,7 +195,7 @@ The status codes and response body will be defined when the endpoint is implemen
     - `DeleteAsync` is implemented. It uses `ExecuteDeleteAsync`: one `DELETE ... WHERE Id = @id` statement, without loading the alert first. It returns `true` if a row was deleted.
     - The other methods throw `NotImplementedException`. `AlertService` tests still use `FakeAlertRepository`.
   - `RateAlert` and `AlertService` don't reference EF Core or SQLite.
-  - `IAlertService` will create, list and delete alerts, and run evaluation.
+  - `IAlertService` creates, lists and deletes alerts (implemented). Evaluation is not implemented yet.
   - `IAlertRepository` is specific to alerts, not generic. Each method saves its own changes.
 - **Alert endpoints:**
   - The three handlers are Minimal API handlers written inline in `Program.cs`, next to `/api/health` and `/api/rates`. They call `IAlertService` only.
@@ -268,9 +268,9 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 | 24 | Isolate integration tests with `RateWatchApiFactory`: each instance gets its own temporary SQLite file, deleted on dispose | Accepted | Integration tests never touch the development database. In-memory SQLite was rejected: the database disappears when the startup migration closes its connection. |
 | 25 | `AlertRepository.DeleteAsync` uses `ExecuteDeleteAsync` instead of find, remove, then `SaveChanges` | Accepted | One SQL statement with no extra query, and the affected-row count gives the true/false result directly. Translated the same way on every EF Core relational provider. |
 | 26 | The fake repository's `DeleteAsync` records requested IDs and returns a value set by the test | Accepted | Alerts in the fake have no IDs (no reflection, `Id` unchanged), so it can't match by ID. The service test only needs to prove the call is passed through. |
-| 27 | Endpoint tests create a new `RateWatchApiFactory` in each test, instead of sharing one class fixture | Pending review | Each test starts with an empty database, so the list and delete assertions don't depend on other tests. Costs a short app startup per test. |
-| 28 | Map `ArgumentException` to a `400` ProblemDetails with try/catch inside the `POST` handler | Pending review | Only one endpoint needs it, so a global exception handler would be more than needed. Matches how `/api/rates` already returns `400`. |
-| 29 | Return `RateAlert` directly, with `Location: /api/alerts/{id}`, and constrain the delete route to `{id:int}` | Pending review | No DTO, consistent with `RateSnapshot`. `{id:int}` makes non-numeric IDs a plain `404`. |
+| 27 | Endpoint tests create a new `RateWatchApiFactory` in each test, instead of sharing one class fixture | Accepted | Each test starts with an empty database, so the list and delete assertions don't depend on other tests. Costs a short app startup per test. |
+| 28 | Map `ArgumentException` to a `400` ProblemDetails with try/catch inside the `POST` handler | Accepted | Only one endpoint needs it, so a global exception handler would be more than needed. Matches how `/api/rates` already returns `400`. |
+| 29 | Return `RateAlert` directly, with `Location: /api/alerts/{id}`, and constrain the delete route to `{id:int}` | Accepted | No DTO, consistent with `RateSnapshot`. `{id:int}` makes non-numeric IDs a plain `404`. |
 
 ## Testing Strategy
 
@@ -305,7 +305,7 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 - Error responses are not fully consistent:
   - A malformed JSON body gets a framework `400` (in Development, a plain-text developer exception page) instead of ProblemDetails.
   - `404` responses have an empty body.
-  - The `detail` text includes .NET's `(Parameter '…')` suffix.
+  - The `detail` text includes .NET's `(Parameter '…')` suffix. For a non-positive target rate, it also includes a line break and `Actual value was 0.`, which come from `ArgumentOutOfRangeException`.
 - `Location` points to `/api/alerts/{id}`, but there is no `GET` for a single alert at that URL; only `DELETE` exists there.
 - There is no frontend for alerts yet.
 - Listing returns every alert, with no paging or filtering.
