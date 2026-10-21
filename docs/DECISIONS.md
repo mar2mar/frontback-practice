@@ -55,3 +55,40 @@ Important architectural decisions for RateWatch, and AI suggestions that were ac
 - **Decision:** There is no endpoint to set or control rates at runtime.
 - **Reason:** Not needed yet. Tests control rates through the stub provider instead.
 - **Source:** User decision.
+
+## 2026-10-21 — Checkpoint 3: Rate alert model and interfaces
+
+### Above-threshold, strict, one-shot alerts
+- **Decision:** An alert triggers when `currentRate > TargetRate`. There are no below-threshold alerts. Once triggered, `TriggeredAt` stays set and the alert is never evaluated again.
+- **Reason:** Keeps the domain minimal. The strict comparison means a rate equal to the target does not trigger.
+- **Source:** User decision. The AI's `AlertDirection` (Above/Below) enum was rejected.
+
+### No email or notification
+- **Decision:** `RateAlert` has no email field, and there is no notification infrastructure.
+- **Reason:** Not required. "Triggered" means `TriggeredAt` is set and the alert is returned from evaluation.
+- **Source:** User decision. The AI's question about an optional `Email` field was answered no.
+
+### Evaluation only when explicitly requested
+- **Decision:** Alerts are evaluated only when a client calls `POST /api/alerts/evaluate`. There is no background polling.
+- **Reason:** Easy to reason about and to test.
+- **Source:** User decision.
+
+### Alert-specific repository and service
+- **Decision:** Add `IAlertService` (create, list, delete, evaluate) and a minimal `IAlertRepository` that is specific to alerts. Each repository method saves its own changes. There is no generic repository, CQRS or MediatR.
+- **Reason:** Keeps EF Core out of the service and lets `AlertService` be tested with an in-memory fake.
+- **Source:** User decision. It replaces the AI's proposal to use `AppDbContext` directly.
+
+### Model and interfaces before persistence
+- **Decision:** This checkpoint adds only the entity and the interfaces. The DbContext, EF Core packages and migrations come later.
+- **Reason:** Smaller checkpoints.
+- **Source:** User decision. It modifies the AI's proposal to start with the entity, DbContext and migration together.
+
+### Constructor validation written test-first
+- **Decision:** For now, `RateAlert`'s constructor only assigns values. The validation rules are documented in NOTES.md as planned, and will be implemented together with their tests.
+- **Reason:** Strict TDD: no validation code without tests.
+- **Source:** AI offered two options (A and B). The user chose B.
+
+### SQLite with EF Core, portable, migrations applied explicitly (planned)
+- **Decision:** Persistence will use EF Core with SQLite and no provider-specific business logic. Threshold comparisons will run in C#, lists will be ordered by `Id`, and migrations will be applied with `dotnet ef database update`, never at startup.
+- **Reason:** SQLite stores `decimal` and `DateTimeOffset` as text, so EF Core can't translate comparisons or ordering on them into SQL. Applying migrations explicitly keeps integration tests away from the local database file.
+- **Source:** AI proposal, modified by the user: explicit migrations only, with no startup migration at all.
