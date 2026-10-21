@@ -97,6 +97,16 @@ All setters are private.
 - **Whitespace is not trimmed**, so `" US"` is rejected.
 - **Non-ASCII letters** are rejected (e.g. `ÜSD`).
 
+**`Trigger(decimal currentRate, DateTimeOffset now)` (implemented and covered by `RateAlertTests`):**
+
+| Situation | Result |
+|---|---|
+| Active and `currentRate > TargetRate` | Returns `true`, and sets `TriggeredAt = now` converted to UTC |
+| Active and `currentRate == TargetRate` or below | Returns `false`. `TriggeredAt` stays `null`. |
+| Already triggered (any rate) | Returns `false`. The original `TriggeredAt` is kept. |
+
+The trigger rule lives only here. The service will supply the current rate and the time.
+
 The entity only checks the format. The service checks that a currency is supported (see below).
 
 ## Service Behavior: `AlertService`
@@ -178,9 +188,7 @@ On any error, nothing is saved.
 
 | Method | Route | Purpose |
 |---|---|---|
-| `POST` | `/api/alerts/evaluate` | Evaluate active alerts and return those triggered by this run |
-
-The status codes and response body will be defined when the endpoint is implemented.
+| `POST` | `/api/alerts/evaluate` | Evaluate active alerts. Decided response: `200 OK` with an array of the alerts triggered by this run (alert JSON), or `[]` if none. |
 
 ## Architecture
 
@@ -230,13 +238,18 @@ The status codes and response body will be defined when the endpoint is implemen
 
 ### Evaluation Behavior (planned)
 
-`POST /api/alerts/evaluate` calls `IAlertService.EvaluateAsync`, which will:
+**Step 1, the entity rule, is done:** `RateAlert.Trigger` (see Entity Contract).
+
+**Remaining steps (planned):** `POST /api/alerts/evaluate` will call `IAlertService.EvaluateAsync`, which will:
 1. Load the active alerts (`TriggeredAt` is null).
 2. Fetch the current rates from `IExchangeRateProvider` once for each base currency.
-3. For each alert, if `rate(QuoteCurrency) > TargetRate`, set `TriggeredAt` to the current UTC time from `TimeProvider`.
-4. Save the triggered alerts and return them.
+3. Call `alert.Trigger(rate, now)` for each alert, with one `now` from `TimeProvider` for the whole run.
+4. Skip an alert if its base currency has no snapshot or its quote currency has no rate. It isn't triggered and there's no error.
+5. Save the triggered alerts and return them. The endpoint will return `200 OK` with that array.
 
-Alerts that are already triggered are skipped, which is what makes them one-shot.
+Rates aren't stored in the database. Evaluation always uses the provider's current rates.
+
+**Concurrency (planned):** saving will use a conditional update (`... WHERE Id = @id AND TriggeredAt IS NULL`). If two evaluations run at the same time, only one can set `TriggeredAt` and report the alert. Running evaluate twice in a row is already safe, because the second run only loads untriggered alerts.
 
 ## AI Collaboration Decisions
 
@@ -297,11 +310,13 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 | 2026-10-21 | Alert listing: repository and service (TDD) | Red: 3 of 3 new tests failed with `NotImplementedException`. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 36 of 36 passed. The development database's last-write time was unchanged by a test run. It had changed since the previous check only because of that checkpoint's manual app start, since `Migrate()` writes EF's migration-lock table on each start. |
 | 2026-10-21 | Alert deletion: repository and service (TDD) | Red: 4 of 4 new test cases failed with `NotImplementedException`. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 40 of 40 passed. The development database's last-write time was unchanged by the test run. |
 | 2026-10-21 | Alert CRUD endpoints (TDD) | Red: 6 of 6 new test cases failed with `404 NotFound`, because the routes didn't exist yet. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 46 of 46 passed. The development database was unchanged and no temporary test files were left behind. Manual check against a throwaway database: `GET` → 200 `[]`; `POST` → 201 with `Location: /api/alerts/1`; unsupported currency, zero target and invalid code → 400 ProblemDetails; malformed JSON → 400 plain text; `DELETE /1` → 204, then 404; `DELETE /abc` → 404. |
+| 2026-10-21 | Evaluation step 1: `RateAlert.Trigger` (TDD) | Red: 5 of 5 new test cases failed with `NotImplementedException` (from a stub). Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 51 of 51 passed. |
 
 ## Known Limitations
 
 - Exchange rates are simulated. There's no real provider.
-- Alert evaluation is not implemented: `AlertService.EvaluateAsync`, `AlertRepository.ListActiveAsync` and `UpdateAsync` throw `NotImplementedException`, and there is no `POST /api/alerts/evaluate`.
+- Alert evaluation is only partly implemented. `RateAlert.Trigger` exists, but `AlertService.EvaluateAsync`, `AlertRepository.ListActiveAsync` and `UpdateAsync` throw `NotImplementedException`, and there is no `POST /api/alerts/evaluate`.
+- `Trigger` doesn't validate `currentRate`. A zero or negative rate is never above a positive target, so it returns `false`.
 - Error responses are not fully consistent:
   - A malformed JSON body gets a framework `400` (in Development, a plain-text developer exception page) instead of ProblemDetails.
   - `404` responses have an empty body.
@@ -347,3 +362,4 @@ To be filled in manually. Claude does not estimate or record time.
 | 2026-10-21 | Alert listing: repository and service | |
 | 2026-10-21 | Alert deletion: repository and service | |
 | 2026-10-21 | Alert CRUD endpoints | |
+| 2026-10-21 | Evaluation step 1: `RateAlert.Trigger` | |

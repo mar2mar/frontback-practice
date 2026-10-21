@@ -132,3 +132,20 @@ Important architectural decisions for RateWatch, and AI suggestions that were ac
   - Responses return `RateAlert` directly.
 - **Reason:** Three small endpoints don't justify controllers, endpoint classes, a result framework or DTO mapping. Scoped lifetimes match `AppDbContext`.
 - **Source:** User requirements (Minimal APIs, scoped DI, existing exception behavior). The handler details are AI choices, accepted by the user.
+
+## 2026-10-21 — Alert evaluation
+
+### The trigger rule lives in the entity
+- **Decision:** `RateAlert.Trigger(currentRate, now)` holds the whole rule: strict `currentRate > TargetRate`, one-shot (returns `false` once triggered and keeps the original `TriggeredAt`), and `TriggeredAt` stored in UTC. The service will only supply the rate and the time.
+- **Reason:** One place for the business rule, testable without the database or HTTP.
+- **Source:** User decision (rule, method signature, UTC). The AI suggested putting the rule in the entity during the evaluation analysis.
+
+### Evaluation semantics and contract (decided; service and endpoint not yet implemented)
+- **Decision:**
+  - Alerts with no available rate (unsupported base, or quote missing from the snapshot) are skipped, not treated as errors.
+  - `POST /api/alerts/evaluate` returns `200 OK` with an array of the alerts triggered by this run.
+  - Two evaluations at the same time will be handled with a conditional database update (`WHERE Id = @id AND TriggeredAt IS NULL`), not with a concurrency token.
+- **Reason:**
+  - The plain array matches `IAlertService.EvaluateAsync`'s return type.
+  - The conditional update needs no migration and makes sure an alert is triggered and reported only once, even when two evaluations overlap.
+- **Source:** User decisions. These were options (a) to (c) and the open questions from the AI's evaluation analysis.

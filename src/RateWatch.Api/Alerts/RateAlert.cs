@@ -3,9 +3,6 @@ namespace RateWatch.Api.Alerts;
 /// <summary>
 /// An above-threshold, one-shot alert: it triggers once when the current rate is greater than <see cref="TargetRate"/>.
 /// </summary>
-/// <remarks>
-/// Evaluation is planned and not implemented yet (see NOTES.md).
-/// </remarks>
 public class RateAlert
 {
     public int Id { get; private set; }
@@ -28,6 +25,22 @@ public class RateAlert
 
         TargetRate = targetRate;
         CreatedAt = createdAt.ToUniversalTime();
+    }
+
+    /// <summary>
+    /// Triggers the alert if it is still active and <paramref name="currentRate"/> is strictly greater than
+    /// <see cref="TargetRate"/>. One-shot: once triggered, it never triggers again.
+    /// </summary>
+    /// <returns>True only if this call triggered the alert.</returns>
+    public bool Trigger(decimal currentRate, DateTimeOffset now)
+    {
+        if (TriggeredAt is not null || currentRate <= TargetRate)
+        {
+            return false;
+        }
+
+        TriggeredAt = now.ToUniversalTime();
+        return true;
     }
 
     private static string NormalizeCurrency(string currency, string paramName)

@@ -85,4 +85,48 @@ public class RateAlertTests
         Assert.Equal(TimeSpan.Zero, alert.CreatedAt.Offset);
         Assert.Equal(local.UtcDateTime, alert.CreatedAt.UtcDateTime);
     }
+
+    [Fact]
+    public void Trigger_above_target_returns_true_and_sets_TriggeredAt()
+    {
+        var alert = new RateAlert("USD", "EUR", 0.95m, CreatedAt);
+        var now = CreatedAt.AddHours(1);
+
+        Assert.True(alert.Trigger(0.950001m, now));
+        Assert.Equal(now, alert.TriggeredAt);
+    }
+
+    [Theory]
+    [InlineData(0.95)] // equal: strict comparison
+    [InlineData(0.94)]
+    public void Trigger_at_or_below_target_returns_false_and_stays_active(decimal currentRate)
+    {
+        var alert = new RateAlert("USD", "EUR", 0.95m, CreatedAt);
+
+        Assert.False(alert.Trigger(currentRate, CreatedAt.AddHours(1)));
+        Assert.Null(alert.TriggeredAt);
+    }
+
+    [Fact]
+    public void Trigger_on_already_triggered_alert_returns_false_and_keeps_original_TriggeredAt()
+    {
+        var alert = new RateAlert("USD", "EUR", 0.95m, CreatedAt);
+        var firstTrigger = CreatedAt.AddHours(1);
+        alert.Trigger(0.96m, firstTrigger);
+
+        Assert.False(alert.Trigger(1.10m, CreatedAt.AddHours(2)));
+        Assert.Equal(firstTrigger, alert.TriggeredAt);
+    }
+
+    [Fact]
+    public void Trigger_normalizes_TriggeredAt_to_utc()
+    {
+        var alert = new RateAlert("USD", "EUR", 0.95m, CreatedAt);
+        var local = new DateTimeOffset(2026, 10, 21, 14, 0, 0, TimeSpan.FromHours(2));
+
+        alert.Trigger(0.96m, local);
+
+        Assert.Equal(TimeSpan.Zero, alert.TriggeredAt!.Value.Offset);
+        Assert.Equal(local.UtcDateTime, alert.TriggeredAt.Value.UtcDateTime);
+    }
 }
