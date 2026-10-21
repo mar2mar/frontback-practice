@@ -71,7 +71,21 @@ All setters are private.
 - **Whitespace is not trimmed**, so `" US"` is rejected.
 - **Non-ASCII letters** are rejected (e.g. `ÜSD`).
 
-The service will check that a currency is supported by the rate provider. The entity only checks the format.
+The entity only checks the format. The service checks that a currency is supported (see below).
+
+## Service Behavior: `AlertService`
+
+**`CreateAsync` (implemented and covered by `AlertServiceTests`):**
+1. Builds a `RateAlert` with `CreatedAt = TimeProvider.GetUtcNow()`. The entity's validation runs first, so invalid input throws before the provider is called.
+2. Calls `IExchangeRateProvider.GetLatestRatesAsync(base)`. If it returns no snapshot, the base currency is unsupported: `ArgumentException` (`ParamName` = `baseCurrency`).
+3. If the quote currency isn't in that snapshot's rates, it is unsupported: `ArgumentException` (`ParamName` = `quoteCurrency`).
+4. Saves the alert with `IAlertRepository.AddAsync` and returns it.
+
+On any error, nothing is saved.
+
+**`ListAsync`, `DeleteAsync` and `EvaluateAsync`:** not implemented. They throw `NotImplementedException`.
+
+`AlertService` is not registered in dependency injection yet. Registration comes with the endpoints and repository.
 
 ## API Contracts
 
@@ -108,7 +122,8 @@ Status codes and response bodies will be defined when each endpoint is implement
 - **Rates (implemented):** `IExchangeRateProvider` represents the external rate API. The app registers `FakeExchangeRateProvider`, and tests use `StubExchangeRateProvider`, which returns rates set explicitly by each test.
 - **Alerts:**
   - `RateAlert` is implemented, with constructor validation. Evaluation is not implemented yet.
-  - `IAlertService` and `IAlertRepository`: interfaces defined, not implemented yet.
+  - `AlertService` implements `IAlertService`. Only `CreateAsync` is implemented so far.
+  - `IAlertRepository`: interface only. There is no real implementation yet; tests use `FakeAlertRepository`.
   - `IAlertService` will create, list and delete alerts, and run evaluation.
   - `IAlertRepository` is specific to alerts, not generic. Each method saves its own changes.
 - **Not used:** CQRS and MediatR.
@@ -157,15 +172,17 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 | 16 | Null currency throws `ArgumentException`, not `ArgumentNullException` | Accepted | Callers handle every invalid currency the same way |
 | 17 | Don't trim whitespace in currency codes | Accepted | Strict input; `" US"` is rejected |
 | 18 | The "currencies must differ" error names `quoteCurrency` | Accepted | The quote is the value that conflicts with the base |
+| 19 | Check currency support with the existing `GetLatestRatesAsync(base)` instead of adding a "supported currencies" method to the provider | Accepted | Keeps the provider interface unchanged. One extra provider call per create is acceptable. |
+| 20 | In `CreateAsync`, run entity validation before calling the provider | Accepted | Invalid input fails fast, and the provider only receives normalized codes |
 
 ## Testing Strategy
 
 - Behavior is written test-first (TDD). Tests and implementation are committed together once they pass.
 - Tests focus on edge cases plus one or two representative happy-path tests. Overlapping cases are not added.
-- **Unit tests:** domain behavior (`RateAlertTests`) and the fake provider, using a deterministic `Random`, `FixedTimeProvider` and zero volatility where needed.
+- **Unit tests:** domain behavior (`RateAlertTests`), `AlertService` (`AlertServiceTests`, using `FakeAlertRepository` and `StubExchangeRateProvider`) and the fake provider, using a deterministic `Random`, `FixedTimeProvider` and zero volatility where needed.
 - **Integration tests:** `WebApplicationFactory`, with `StubExchangeRateProvider` swapped in where exact rates matter.
 - **Planned:**
-  - `AlertService` tests against an in-memory fake repository and the stub provider. These include boundary cases: rate equal to the target (no trigger), just above it (trigger), and an already-triggered alert (skipped).
+  - `AlertService` tests for list, delete and evaluate. Evaluation tests will include boundary cases: rate equal to the target (no trigger), just above it (trigger), and an already-triggered alert (skipped).
   - Persistence tests with in-memory SQLite.
 
 ## Verification Log
@@ -176,11 +193,13 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 | 2026-10-21 | Simulated starter app | 12 of 12 tests passed. Frontend build passed. `/api/rates` checked through the proxy with HTTP requests. The UI was not checked in a browser. |
 | 2026-10-21 | `RateAlert` model and alert interfaces | `dotnet build`: 0 warnings, 0 errors. `dotnet test`: 12 of 12 passed. No new tests, by design. |
 | 2026-10-21 | `RateAlert` constructor validation (TDD) | Red: 18 of 21 new tests failed for the expected reasons (no exception thrown, not uppercase, offset not UTC). The 3 that passed check behavior plain assignment already gave. Green: 33 of 33 passed. Then trimmed to edge cases and one happy-path test (14 cases): `dotnet build` 0 warnings, 0 errors. `dotnet test`: 26 of 26 passed. |
+| 2026-10-21 | `AlertService.CreateAsync` (TDD) | Red: 4 of 4 new tests failed with `NotImplementedException`. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 30 of 30 passed. |
 
 ## Known Limitations
 
 - Exchange rates are simulated. There's no real provider.
-- There's no persistence yet. Alert endpoints, the service and the repository are not implemented.
+- There's no persistence yet. Alert endpoints and the repository are not implemented. `AlertService` implements only `CreateAsync` and isn't registered in dependency injection.
+- `FakeAlertRepository` doesn't assign alert IDs, because `Id` has a private setter and is meant to come from the database. It will need a way to assign IDs before list and delete tests.
 - `RateAlert` checks the format of currency codes, but not whether a code is a real ISO 4217 currency (e.g. `ABC` is accepted). The service will check that currencies are supported.
 - Evaluation only happens when requested. Alerts don't trigger on their own.
 - There are no users, authentication or notifications.
@@ -206,3 +225,4 @@ To be filled in manually. Claude does not estimate or record time.
 | 2026-10-21 | Simulated starter app | |
 | 2026-10-21 | `RateAlert` model and alert interfaces | |
 | 2026-10-21 | `RateAlert` constructor validation | |
+| 2026-10-21 | `AlertService.CreateAsync` | |
