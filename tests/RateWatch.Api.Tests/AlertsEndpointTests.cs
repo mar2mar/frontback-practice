@@ -9,10 +9,6 @@ namespace RateWatch.Api.Tests;
 /// </summary>
 public class AlertsEndpointTests
 {
-    private record AlertResponse(
-        int Id, string BaseCurrency, string QuoteCurrency, decimal TargetRate,
-        DateTimeOffset CreatedAt, DateTimeOffset? TriggeredAt);
-
     [Fact]
     public async Task Post_creates_alert_and_returns_201_with_location()
     {

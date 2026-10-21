@@ -180,3 +180,14 @@ Important architectural decisions for RateWatch, and AI suggestions that were ac
   - Calling the provider one base at a time would be slow with a real remote provider and many base currencies.
   - A database error in phase 2 could still save some triggers without reporting them, because there's no transaction around the run.
 - **Source:** User specification (steps 1–8). The AI proposed a single loop with lazy fetching. The user adjusted it to two phases after the AI pointed out the partial-progress risk. Not catching provider exceptions is an AI choice, accepted by the user.
+
+### `POST /api/alerts/evaluate` endpoint (implemented)
+- **Decision:**
+  - An inline Minimal API handler in `Program.cs`: `Results.Ok(await alerts.EvaluateAsync(cancellationToken))`.
+  - No request body, no response DTO, no try/catch.
+  - It returns `200 OK` with the alerts triggered by this request, oldest first, or `[]`.
+- **Reason:**
+  - The service already returns exactly the response contract (only confirmed alerts, in order), so the handler just passes it through.
+  - Provider failures are left unhandled on purpose, as decided for the service.
+- **Trade-off:** a provider failure surfaces as an unhandled `500` without a ProblemDetails body. A global exception handler is left as a future improvement.
+- **Source:** User specification. The AI implemented it with no extra choices beyond moving the test-only `AlertResponse` record into a shared file.

@@ -52,4 +52,8 @@ app.MapGet("/api/alerts", async (IAlertService alerts, CancellationToken cancell
 app.MapDelete("/api/alerts/{id:int}", async (int id, IAlertService alerts, CancellationToken cancellationToken) =>
     await alerts.DeleteAsync(id, cancellationToken) ? Results.NoContent() : Results.NotFound());
 
+// Returns only the alerts triggered by this request (oldest first); [] when none.
+app.MapPost("/api/alerts/evaluate", async (IAlertService alerts, CancellationToken cancellationToken) =>
+    Results.Ok(await alerts.EvaluateAsync(cancellationToken)));
+
 app.Run();
