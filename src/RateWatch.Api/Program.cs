@@ -12,6 +12,12 @@ builder.Services.AddSingleton<IExchangeRateProvider>(
 
 var app = builder.Build();
 
+// Create the SQLite database if needed and apply pending migrations; existing data is kept.
+using (var scope = app.Services.CreateScope())
+{
+    scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.Migrate();
+}
+
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
 
 app.MapGet("/api/rates", async (IExchangeRateProvider provider, CancellationToken cancellationToken, string @base = "USD") =>

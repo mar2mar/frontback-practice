@@ -17,6 +17,8 @@ Status markers: **Implemented** = in the code and verified. **Planned** = agreed
    dotnet run --project src/RateWatch.Api
    ```
 
+   On startup, the backend creates the SQLite database if it doesn't exist and applies any pending migrations. No separate database step is needed.
+
    - Backend URL: http://localhost:5080
    - Health endpoint: http://localhost:5080/api/health
 
@@ -32,11 +34,14 @@ Keep the backend running while you use the frontend. The Vite dev server proxies
 
 ## Database Setup
 
-Migrations are applied explicitly; the app never migrates on startup. Run these commands from the repository root:
+Database initialization is automatic:
+- When the backend starts, `Database.Migrate()` creates `src/RateWatch.Api/ratewatch.db` if it's missing and applies any pending migrations.
+- Existing data is kept across restarts.
+
+The `dotnet-ef` CLI is only needed to create new migrations. Run these commands from the repository root:
 
 ```powershell
-dotnet tool restore                                   # installs the pinned dotnet-ef (.config/dotnet-tools.json)
-dotnet ef database update --project src/RateWatch.Api # creates or updates src/RateWatch.Api/ratewatch.db
+dotnet tool restore   # installs the pinned dotnet-ef (.config/dotnet-tools.json)
 ```
 
 - Add a migration after changing the model:
@@ -45,7 +50,9 @@ dotnet ef database update --project src/RateWatch.Api # creates or updates src/R
   dotnet ef migrations add <Name> --project src/RateWatch.Api --output-dir Data/Migrations
   ```
 
-- Reset the local database: delete `src/RateWatch.Api/ratewatch.db`, then run `dotnet ef database update` again.
+- Reset the local database: stop the backend, delete `src/RateWatch.Api/ratewatch.db` (and any `ratewatch.db-wal` / `ratewatch.db-shm` files), then start the backend again.
+- Optional: `dotnet ef database update --project src/RateWatch.Api` applies migrations without starting the app.
+- SQLite writes recent changes to a `-wal` file next to the database (WAL journaling), so the main `.db` file can look small. Those files are git-ignored too (`*.db-wal`, `*.db-shm`).
 - The connection string (`ConnectionStrings:RateWatch` in `appsettings.json`) is `Data Source=ratewatch.db`, a path relative to the API project folder. Both `dotnet run --project` and `dotnet ef --project` use that folder, so they open the same file.
 - The database file is git-ignored (`*.db`).
 
@@ -166,7 +173,11 @@ Status codes and response bodies will be defined when each endpoint is implement
   - SQLite stores `decimal` and `DateTimeOffset` as text, so EF Core can't translate comparisons or ordering on them into SQL.
   - Therefore the threshold comparison runs in C#, and lists are ordered by `Id`, not `CreatedAt`.
   - `HasPrecision(18, 6)` on `TargetRate` gives proper numeric columns on PostgreSQL and SQL Server. SQLite ignores it.
-- **Migrations:** applied explicitly with `dotnet ef database update`, not at application startup (see Database Setup).
+- **Migrations:** applied automatically at startup with `Database.Migrate()` in `Program.cs`, inline, with no extra service. `EnsureCreated()` is not used.
+- **Trade-off:**
+  - Automatic migrations are convenient for this exercise: one command starts a working backend.
+  - In production, migrations are usually applied separately, as a reviewed SQL script or a migration bundle in the deployment pipeline. That avoids several instances racing to migrate, gives the app no need for permission to change the schema, and makes failures visible before release.
+- **Design-time tooling:** `dotnet ef` stops the app after `Build()`, so the startup migration doesn't run when creating migrations.
 
 ### Evaluation Behavior (planned)
 
@@ -205,13 +216,14 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 | 21 | Use EF Core 10.0.13 instead of 10.0.1 | Accepted | 10.0.1 pulled in packages with known high-severity vulnerabilities (`SQLitePCLRaw.lib.e_sqlite3`, `System.Security.Cryptography.Pkcs`). 10.0.13 has none. |
 | 22 | Persistence tests use in-memory SQLite and apply the real migrations with `Migrate()`, not `EnsureCreated()` | Accepted | Tests the actual migration, and fails if the model has changes no migration covers |
 | 23 | Register `AppDbContext` now, and register the repository and service later with the endpoints | Accepted | `dotnet ef` needs the context registered. Nothing uses the repository or service yet, so registering them can wait. |
+| 24 | Isolate integration tests with `RateWatchApiFactory`: each instance gets its own temporary SQLite file, deleted on dispose | Accepted | Integration tests never touch the development database. In-memory SQLite was rejected: the database disappears when the startup migration closes its connection. |
 
 ## Testing Strategy
 
 - Behavior is written test-first (TDD). Tests and implementation are committed together once they pass.
 - Tests focus on edge cases plus one or two representative happy-path tests. Overlapping cases are not added.
 - **Unit tests:** domain behavior (`RateAlertTests`), `AlertService` (`AlertServiceTests`, using `FakeAlertRepository` and `StubExchangeRateProvider`) and the fake provider, using a deterministic `Random`, `FixedTimeProvider` and zero volatility where needed.
-- **Integration tests:** `WebApplicationFactory`, with `StubExchangeRateProvider` swapped in where exact rates matter.
+- **Integration tests:** `RateWatchApiFactory`, a `WebApplicationFactory<Program>` that overrides `ConnectionStrings:RateWatch` with a temporary SQLite file for each factory instance. `StubExchangeRateProvider` is swapped in where exact rates matter. `DatabaseStartupTests` checks that startup migrates a fresh database and that a restart keeps existing alerts.
 - **Persistence tests:** `AlertRepositoryTests`. Each test class instance gets its own in-memory SQLite database, built with the real migrations. Data is read back through a separate `AppDbContext`, so the test checks what was actually stored.
 - **Planned:**
   - `AlertService` tests for list, delete and evaluate. Evaluation tests will include boundary cases: rate equal to the target (no trigger), just above it (trigger), and an already-triggered alert (skipped).
@@ -227,6 +239,7 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 | 2026-10-21 | `RateAlert` constructor validation (TDD) | Red: 18 of 21 new tests failed for the expected reasons (no exception thrown, not uppercase, offset not UTC). The 3 that passed check behavior plain assignment already gave. Green: 33 of 33 passed. Then trimmed to edge cases and one happy-path test (14 cases): `dotnet build` 0 warnings, 0 errors. `dotnet test`: 26 of 26 passed. |
 | 2026-10-21 | `AlertService.CreateAsync` (TDD) | Red: 4 of 4 new tests failed with `NotImplementedException`. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 30 of 30 passed. |
 | 2026-10-21 | SQLite persistence: `AlertRepository.AddAsync` (TDD) | `dotnet list package --vulnerable`: none found. Red: 1 of 1 new test failed with `NotImplementedException`, after `Migrate()` had succeeded. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 31 of 31 passed. Ran `dotnet ef database update` and it created `src/RateWatch.Api/ratewatch.db`, which git ignores. Confirmed the app's content root is `src/RateWatch.Api`. |
+| 2026-10-21 | Automatic database initialization at startup (TDD) | Red: 2 of 2 new tests failed for the expected reasons (no database file created; `no such table: RateAlerts`). Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 33 of 33 passed, run twice. The development database's last-write time was unchanged after the test runs, and no temporary test files were left behind. Manual check: started the app against a fresh file twice. `/api/health` returned ok both times. `dotnet ef migrations list` showed `InitialCreate` as applied in that file and `(Pending)` in an empty one. The app also started against the existing development database. |
 
 ## Known Limitations
 
@@ -234,6 +247,7 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 - There are no alert endpoints. `AlertService` implements only `CreateAsync`, and `AlertRepository` implements only `AddAsync`. Neither is registered in dependency injection.
 - The SQLite file path is relative to the API project folder, so run `dotnet run` and `dotnet ef` with `--project` from the repository root, as documented. Running the app from another folder would open a different, empty database.
 - SQLite stores `decimal` and `DateTimeOffset` as text, so EF Core can't filter or sort by `TargetRate` or `CreatedAt` in SQL.
+- Migrations run on every app start. That's fine for one local instance, but not suitable for several instances or controlled production releases.
 - `FakeAlertRepository` doesn't assign alert IDs, because `Id` has a private setter and is meant to come from the database. It will need a way to assign IDs before list and delete tests.
 - `RateAlert` checks the format of currency codes, but not whether a code is a real ISO 4217 currency (e.g. `ABC` is accepted). The service will check that currencies are supported.
 - Evaluation only happens when requested. Alerts don't trigger on their own.
@@ -247,6 +261,7 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 - Notifications, such as email or webhooks.
 - A real exchange-rate provider with caching and retries.
 - PostgreSQL or SQL Server for production: switch the provider package and the `Use...()` call, regenerate the migrations, and use connection strings per environment.
+- In production, apply migrations in the deployment pipeline (SQL script or migration bundle) instead of at startup.
 - User accounts so each user has their own alerts.
 - Frontend tests with Vitest.
 
@@ -262,3 +277,4 @@ To be filled in manually. Claude does not estimate or record time.
 | 2026-10-21 | `RateAlert` constructor validation | |
 | 2026-10-21 | `AlertService.CreateAsync` | |
 | 2026-10-21 | SQLite persistence for creating alerts | |
+| 2026-10-21 | Automatic database initialization at startup | |

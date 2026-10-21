@@ -109,3 +109,15 @@ Important architectural decisions for RateWatch, and AI suggestions that were ac
   - 10.0.1 pulled in packages with known high-severity vulnerabilities, and 10.0.13 reports none.
   - A local tool manifest means anyone can install the same CLI version with `dotnet tool restore`.
 - **Source:** AI change during implementation, accepted by the user.
+
+## 2026-10-21 — Automatic database initialization
+
+### Apply migrations at startup (supersedes "migrations applied explicitly")
+- **Decision:** `Program.cs` calls `Database.Migrate()` once after `Build()`. It creates the SQLite file if it's missing and applies pending migrations. Existing data is kept, and `EnsureCreated()` is not used.
+- **Reason:** One command starts a working backend, which suits a take-home exercise. Production deployments would apply migrations separately.
+- **Source:** User decision. It replaces the earlier "explicit migrations only, no startup migration" decision from Checkpoint 3.
+
+### Integration tests use an isolated temporary SQLite file
+- **Decision:** `RateWatchApiFactory` overrides `ConnectionStrings:RateWatch` with a unique file in the temp folder for each factory instance, and deletes it on dispose.
+- **Reason:** Startup migration would otherwise make the integration tests create or change the development database. A file is used instead of in-memory SQLite, because an in-memory database disappears when the startup migration closes its connection.
+- **Source:** AI proposal, accepted by the user.

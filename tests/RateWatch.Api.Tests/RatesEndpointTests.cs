@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Http.Json;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using RateWatch.Api.Rates;
@@ -8,8 +7,8 @@ using RateWatch.Api.Tests.TestDoubles;
 
 namespace RateWatch.Api.Tests;
 
-public class RatesEndpointTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public class RatesEndpointTests(RateWatchApiFactory factory)
+    : IClassFixture<RateWatchApiFactory>
 {
     [Fact]
     public async Task Get_rates_defaults_to_usd_and_returns_provider_rates()
