@@ -56,4 +56,16 @@ public class AlertServiceTests
 
         Assert.Empty(_repository.Alerts);
     }
+
+    [Fact]
+    public async Task List_returns_the_repository_alerts_in_repository_order()
+    {
+        var first = new RateAlert("USD", "GBP", 0.80m, Now);
+        var second = new RateAlert("USD", "EUR", 0.95m, Now);
+        _repository.Alerts.AddRange([first, second]);
+
+        var alerts = await _service.ListAsync();
+
+        Assert.Equal([first, second], alerts);
+    }
 }

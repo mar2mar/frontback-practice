@@ -44,4 +44,32 @@ public sealed class AlertRepositoryTests : IDisposable
         Assert.Equal(createdAt, stored.CreatedAt);
         Assert.Null(stored.TriggeredAt);
     }
+
+    [Fact]
+    public async Task List_returns_empty_list_when_there_are_no_alerts()
+    {
+        await using var db = new AppDbContext(_options);
+
+        var alerts = await new AlertRepository(db).ListAsync();
+
+        Assert.Empty(alerts);
+    }
+
+    [Fact]
+    public async Task List_returns_alerts_newest_first()
+    {
+        var createdAt = new DateTimeOffset(2026, 10, 21, 10, 0, 0, TimeSpan.Zero);
+        await using (var db = new AppDbContext(_options))
+        {
+            var repository = new AlertRepository(db);
+            await repository.AddAsync(new RateAlert("USD", "EUR", 0.95m, createdAt));
+            await repository.AddAsync(new RateAlert("USD", "GBP", 0.80m, createdAt));
+        }
+
+        await using var readDb = new AppDbContext(_options);
+        var alerts = await new AlertRepository(readDb).ListAsync();
+
+        Assert.Equal(["GBP", "EUR"], alerts.Select(a => a.QuoteCurrency));
+        Assert.True(alerts[0].Id > alerts[1].Id);
+    }
 }

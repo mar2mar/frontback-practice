@@ -16,7 +16,7 @@ public class FakeAlertRepository : IAlertRepository
     }
 
     public Task<IReadOnlyList<RateAlert>> ListAsync(CancellationToken cancellationToken = default) =>
-        throw new NotImplementedException();
+        Task.FromResult<IReadOnlyList<RateAlert>>(Alerts.ToList());
 
     public Task<IReadOnlyList<RateAlert>> ListActiveAsync(CancellationToken cancellationToken = default) =>
         throw new NotImplementedException();

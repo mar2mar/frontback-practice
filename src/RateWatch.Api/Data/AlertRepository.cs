@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using RateWatch.Api.Alerts;
 
 namespace RateWatch.Api.Data;
@@ -10,8 +11,11 @@ public class AlertRepository(AppDbContext db) : IAlertRepository
         await db.SaveChangesAsync(cancellationToken);
     }
 
-    public Task<IReadOnlyList<RateAlert>> ListAsync(CancellationToken cancellationToken = default) =>
-        throw new NotImplementedException();
+    public async Task<IReadOnlyList<RateAlert>> ListAsync(CancellationToken cancellationToken = default) =>
+        await db.RateAlerts
+            .AsNoTracking()
+            .OrderByDescending(a => a.Id)
+            .ToListAsync(cancellationToken);
 
     public Task<IReadOnlyList<RateAlert>> ListActiveAsync(CancellationToken cancellationToken = default) =>
         throw new NotImplementedException();
