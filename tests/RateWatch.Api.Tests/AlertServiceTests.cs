@@ -68,4 +68,17 @@ public class AlertServiceTests
 
         Assert.Equal([first, second], alerts);
     }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Delete_passes_the_id_to_the_repository_and_returns_its_result(bool repositoryResult)
+    {
+        _repository.DeleteResult = repositoryResult;
+
+        var deleted = await _service.DeleteAsync(42);
+
+        Assert.Equal(repositoryResult, deleted);
+        Assert.Equal([42], _repository.DeletedIds);
+    }
 }

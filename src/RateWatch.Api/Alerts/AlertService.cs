@@ -27,7 +27,7 @@ public class AlertService(IAlertRepository repository, IExchangeRateProvider rat
         repository.ListAsync(cancellationToken);
 
     public Task<bool> DeleteAsync(int id, CancellationToken cancellationToken = default) =>
-        throw new NotImplementedException();
+        repository.DeleteAsync(id, cancellationToken);
 
     public Task<IReadOnlyList<RateAlert>> EvaluateAsync(CancellationToken cancellationToken = default) =>
         throw new NotImplementedException();

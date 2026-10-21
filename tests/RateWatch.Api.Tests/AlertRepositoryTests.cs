@@ -72,4 +72,48 @@ public sealed class AlertRepositoryTests : IDisposable
         Assert.Equal(["GBP", "EUR"], alerts.Select(a => a.QuoteCurrency));
         Assert.True(alerts[0].Id > alerts[1].Id);
     }
+
+    [Fact]
+    public async Task Delete_removes_only_the_given_alert_and_returns_true()
+    {
+        var createdAt = new DateTimeOffset(2026, 10, 21, 10, 0, 0, TimeSpan.Zero);
+        var toDelete = new RateAlert("USD", "EUR", 0.95m, createdAt);
+        var toKeep = new RateAlert("USD", "GBP", 0.80m, createdAt);
+        await using (var db = new AppDbContext(_options))
+        {
+            var repository = new AlertRepository(db);
+            await repository.AddAsync(toDelete);
+            await repository.AddAsync(toKeep);
+        }
+
+        bool deleted;
+        await using (var db = new AppDbContext(_options))
+        {
+            deleted = await new AlertRepository(db).DeleteAsync(toDelete.Id);
+        }
+
+        Assert.True(deleted);
+        await using var readDb = new AppDbContext(_options);
+        Assert.Equal(toKeep.Id, Assert.Single(await readDb.RateAlerts.ToListAsync()).Id);
+    }
+
+    [Fact]
+    public async Task Delete_of_unknown_id_returns_false_and_keeps_existing_alerts()
+    {
+        var alert = new RateAlert("USD", "EUR", 0.95m, new DateTimeOffset(2026, 10, 21, 10, 0, 0, TimeSpan.Zero));
+        await using (var db = new AppDbContext(_options))
+        {
+            await new AlertRepository(db).AddAsync(alert);
+        }
+
+        bool deleted;
+        await using (var db = new AppDbContext(_options))
+        {
+            deleted = await new AlertRepository(db).DeleteAsync(alert.Id + 1);
+        }
+
+        Assert.False(deleted);
+        await using var readDb = new AppDbContext(_options);
+        Assert.Single(await readDb.RateAlerts.ToListAsync());
+    }
 }

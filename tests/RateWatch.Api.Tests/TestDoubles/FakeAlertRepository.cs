@@ -21,8 +21,17 @@ public class FakeAlertRepository : IAlertRepository
     public Task<IReadOnlyList<RateAlert>> ListActiveAsync(CancellationToken cancellationToken = default) =>
         throw new NotImplementedException();
 
-    public Task<bool> DeleteAsync(int id, CancellationToken cancellationToken = default) =>
-        throw new NotImplementedException();
+    /// <summary>Ids passed to <see cref="DeleteAsync"/>. Alerts here have no ids, so nothing is matched or removed.</summary>
+    public List<int> DeletedIds { get; } = [];
+
+    /// <summary>The value <see cref="DeleteAsync"/> returns.</summary>
+    public bool DeleteResult { get; set; }
+
+    public Task<bool> DeleteAsync(int id, CancellationToken cancellationToken = default)
+    {
+        DeletedIds.Add(id);
+        return Task.FromResult(DeleteResult);
+    }
 
     public Task UpdateAsync(IEnumerable<RateAlert> alerts, CancellationToken cancellationToken = default) =>
         throw new NotImplementedException();

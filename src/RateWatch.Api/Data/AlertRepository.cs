@@ -20,8 +20,10 @@ public class AlertRepository(AppDbContext db) : IAlertRepository
     public Task<IReadOnlyList<RateAlert>> ListActiveAsync(CancellationToken cancellationToken = default) =>
         throw new NotImplementedException();
 
-    public Task<bool> DeleteAsync(int id, CancellationToken cancellationToken = default) =>
-        throw new NotImplementedException();
+    public async Task<bool> DeleteAsync(int id, CancellationToken cancellationToken = default) =>
+        await db.RateAlerts
+            .Where(a => a.Id == id)
+            .ExecuteDeleteAsync(cancellationToken) > 0;
 
     public Task UpdateAsync(IEnumerable<RateAlert> alerts, CancellationToken cancellationToken = default) =>
         throw new NotImplementedException();

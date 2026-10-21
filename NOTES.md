@@ -111,7 +111,9 @@ On any error, nothing is saved.
 
 **`ListAsync` (implemented):** returns `IAlertRepository.ListAsync()` unchanged. The service doesn't sort again: ordering is the repository's job.
 
-**`DeleteAsync` and `EvaluateAsync`:** not implemented. They throw `NotImplementedException`.
+**`DeleteAsync` (implemented):** returns `IAlertRepository.DeleteAsync(id)` unchanged: `true` if the alert was deleted, `false` if no alert has that ID. Alerts are deleted permanently.
+
+**`EvaluateAsync`:** not implemented. It throws `NotImplementedException`.
 
 `AlertService` is not registered in dependency injection yet. Registration comes with the endpoints and repository.
 
@@ -150,10 +152,11 @@ Status codes and response bodies will be defined when each endpoint is implement
 - **Rates (implemented):** `IExchangeRateProvider` represents the external rate API. The app registers `FakeExchangeRateProvider`, and tests use `StubExchangeRateProvider`, which returns rates set explicitly by each test.
 - **Alerts:**
   - `RateAlert` is implemented, with constructor validation. Evaluation is not implemented yet.
-  - `AlertService` implements `IAlertService`. `CreateAsync` and `ListAsync` are implemented so far.
+  - `AlertService` implements `IAlertService`. `CreateAsync`, `ListAsync` and `DeleteAsync` are implemented so far.
   - `AlertRepository` (in `Data/`) implements `IAlertRepository` with EF Core:
     - `AddAsync` is implemented.
     - `ListAsync` is implemented. It uses `AsNoTracking()` and orders by `Id` descending, newest first. Sorting by `Id` works the same on every database, whereas SQLite can't sort `CreatedAt` in SQL.
+    - `DeleteAsync` is implemented. It uses `ExecuteDeleteAsync`: one `DELETE ... WHERE Id = @id` statement, without loading the alert first. It returns `true` if a row was deleted.
     - The other methods throw `NotImplementedException`. `AlertService` tests still use `FakeAlertRepository`.
   - `RateAlert` and `AlertService` don't reference EF Core or SQLite.
   - `IAlertService` will create, list and delete alerts, and run evaluation.
@@ -222,6 +225,8 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 | 22 | Persistence tests use in-memory SQLite and apply the real migrations with `Migrate()`, not `EnsureCreated()` | Accepted | Tests the actual migration, and fails if the model has changes no migration covers |
 | 23 | Register `AppDbContext` now, and register the repository and service later with the endpoints | Accepted | `dotnet ef` needs the context registered. Nothing uses the repository or service yet, so registering them can wait. |
 | 24 | Isolate integration tests with `RateWatchApiFactory`: each instance gets its own temporary SQLite file, deleted on dispose | Accepted | Integration tests never touch the development database. In-memory SQLite was rejected: the database disappears when the startup migration closes its connection. |
+| 25 | `AlertRepository.DeleteAsync` uses `ExecuteDeleteAsync` instead of find, remove, then `SaveChanges` | Accepted | One SQL statement with no extra query, and the affected-row count gives the true/false result directly. Translated the same way on every EF Core relational provider. |
+| 26 | The fake repository's `DeleteAsync` records requested IDs and returns a value set by the test | Accepted | Alerts in the fake have no IDs (no reflection, `Id` unchanged), so it can't match by ID. The service test only needs to prove the call is passed through. |
 
 ## Testing Strategy
 
@@ -231,7 +236,7 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 - **Integration tests:** `RateWatchApiFactory`, a `WebApplicationFactory<Program>` that overrides `ConnectionStrings:RateWatch` with a temporary SQLite file for each factory instance. `StubExchangeRateProvider` is swapped in where exact rates matter. `DatabaseStartupTests` checks that startup migrates a fresh database and that a restart keeps existing alerts.
 - **Persistence tests:** `AlertRepositoryTests`. Each test class instance gets its own in-memory SQLite database, built with the real migrations. Data is read back through a separate `AppDbContext`, so the test checks what was actually stored.
 - **Planned:**
-  - `AlertService` tests for delete and evaluate. Evaluation tests will include boundary cases: rate equal to the target (no trigger), just above it (trigger), and an already-triggered alert (skipped).
+  - `AlertService` tests for evaluate. They will include boundary cases: rate equal to the target (no trigger), just above it (trigger), and an already-triggered alert (skipped).
   - Persistence tests for the remaining repository methods.
 
 ## Verification Log
@@ -246,16 +251,17 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 | 2026-10-21 | SQLite persistence: `AlertRepository.AddAsync` (TDD) | `dotnet list package --vulnerable`: none found. Red: 1 of 1 new test failed with `NotImplementedException`, after `Migrate()` had succeeded. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 31 of 31 passed. Ran `dotnet ef database update` and it created `src/RateWatch.Api/ratewatch.db`, which git ignores. Confirmed the app's content root is `src/RateWatch.Api`. |
 | 2026-10-21 | Automatic database initialization at startup (TDD) | Red: 2 of 2 new tests failed for the expected reasons (no database file created; `no such table: RateAlerts`). Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 33 of 33 passed, run twice. The development database's last-write time was unchanged after the test runs, and no temporary test files were left behind. Manual check: started the app against a fresh file twice. `/api/health` returned ok both times. `dotnet ef migrations list` showed `InitialCreate` as applied in that file and `(Pending)` in an empty one. The app also started against the existing development database. |
 | 2026-10-21 | Alert listing: repository and service (TDD) | Red: 3 of 3 new tests failed with `NotImplementedException`. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 36 of 36 passed. The development database's last-write time was unchanged by a test run. It had changed since the previous check only because of that checkpoint's manual app start, since `Migrate()` writes EF's migration-lock table on each start. |
+| 2026-10-21 | Alert deletion: repository and service (TDD) | Red: 4 of 4 new test cases failed with `NotImplementedException`. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 40 of 40 passed. The development database's last-write time was unchanged by the test run. |
 
 ## Known Limitations
 
 - Exchange rates are simulated. There's no real provider.
-- There are no alert endpoints. `AlertService` implements only create and list, and `AlertRepository` only add and list. Neither is registered in dependency injection.
+- There are no alert endpoints. `AlertService` implements create, list and delete, but not evaluate. `AlertRepository` implements add, list and delete, but not `ListActiveAsync` or `UpdateAsync`. Neither is registered in dependency injection.
 - Listing returns every alert, with no paging or filtering.
 - The SQLite file path is relative to the API project folder, so run `dotnet run` and `dotnet ef` with `--project` from the repository root, as documented. Running the app from another folder would open a different, empty database.
 - SQLite stores `decimal` and `DateTimeOffset` as text, so EF Core can't filter or sort by `TargetRate` or `CreatedAt` in SQL.
 - Migrations run on every app start. That's fine for one local instance, but not suitable for several instances or controlled production releases.
-- `FakeAlertRepository` doesn't assign alert IDs, because `Id` has a private setter and is meant to come from the database. Its `ListAsync` returns alerts in insertion order, which is enough for the service's delegation test. Delete tests will need a way to assign IDs.
+- `FakeAlertRepository` doesn't assign alert IDs, because `Id` has a private setter and is meant to come from the database. Its `ListAsync` returns alerts in insertion order. Its `DeleteAsync` records the requested IDs and returns a value the test sets, without matching alerts by ID. That's enough for the service's delegation tests; real deletion by ID is tested against SQLite.
 - `RateAlert` checks the format of currency codes, but not whether a code is a real ISO 4217 currency (e.g. `ABC` is accepted). The service will check that currencies are supported.
 - Evaluation only happens when requested. Alerts don't trigger on their own.
 - There are no users, authentication or notifications.
@@ -286,3 +292,4 @@ To be filled in manually. Claude does not estimate or record time.
 | 2026-10-21 | SQLite persistence for creating alerts | |
 | 2026-10-21 | Automatic database initialization at startup | |
 | 2026-10-21 | Alert listing: repository and service | |
+| 2026-10-21 | Alert deletion: repository and service | |
