@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x' # projects target net10.0; no global.json
+
+      - name: Restore
+        run: dotnet restore RateWatch.slnx
+
+      - name: Build
+        run: dotnet build RateWatch.slnx --no-restore
+
+      - name: Test
+        run: dotnet test RateWatch.slnx --no-build
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24' # LTS; satisfies vite, vitest and jsdom engine ranges
+          package-manager-cache: false # no caching, by design
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build

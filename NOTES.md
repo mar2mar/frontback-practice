@@ -65,6 +65,17 @@ dotnet test                       # backend: unit, SQLite persistence and HTTP i
 cd frontend; npm install; npm test   # frontend: Vitest, single run (no watch mode)
 ```
 
+## Continuous Integration
+
+`.github/workflows/ci.yml` runs on every `push` and `pull_request`, on any branch, with `contents: read` permissions. It has two independent jobs on `ubuntu-latest`:
+
+| Job | Setup | Steps |
+|---|---|---|
+| `backend` | `actions/setup-dotnet@v6`, SDK `10.0.x` (projects target `net10.0`; there's no `global.json`) | `dotnet restore RateWatch.slnx` → `dotnet build --no-restore` → `dotnet test --no-build` |
+| `frontend` (in `frontend/`) | `actions/setup-node@v7`, Node `24` (LTS), `package-manager-cache: false` | `npm ci` → `npm test` → `npm run build` |
+
+There's no caching (`setup-node`'s automatic npm cache is turned off explicitly), no saved build outputs, no secrets and no deployment. The project is delivered as a ZIP, so **the workflow only runs once the code is pushed to a GitHub repository**. It has never run on GitHub. The same commands were run locally (see Verification Log).
+
 ## Business Rules and Assumptions
 
 - Alerts are **above-threshold only**. There are no "below" alerts.
@@ -344,6 +355,9 @@ Rates aren't stored in the database. Evaluation always uses the provider's curre
 | 37 | The `AlertsPanel` tests' `fetch` stub returns responses in call order | Accepted | Simplest stub, and the order of calls is part of the behavior being tested (create → reload, delete → reload). The trade-off: tests break if the call order changes. |
 | 38 | A `404` on delete shows "That alert no longer exists." and still reloads the list | Accepted | The alert is already gone, for example deleted in another tab, so refreshing shows the true state. |
 | 39 | Show the evaluation result as a `role="status"` text next to the "Evaluate alerts" button, separate from the error area | Accepted | A result isn't an error, so it gets its own polite status region. Screen readers announce it without interrupting. |
+| 40 | CI uses Node `24` instead of the local Node 26 | Accepted | Node 24 is the current LTS, and it satisfies every frontend engine range (vitest `^24`, jsdom `^24.15.0`, vite `>=22.12`). |
+| 41 | Pin `actions/checkout@v7`, `actions/setup-dotnet@v6` and `actions/setup-node@v7` (the latest major versions, released 2026-07 to 2026-10) | Accepted | Major-version tags get fixes automatically while staying on a stable API. |
+| 42 | CI SDK `10.0.x` instead of pinning the exact local SDK (10.0.101) or adding `global.json` | Accepted | No `global.json` exists, and adding one would change local builds too. `10.0.x` matches `net10.0` and picks up patched SDKs. |
 
 ## Testing Strategy
 
@@ -393,6 +407,7 @@ Rates aren't stored in the database. Evaluation always uses the provider's curre
 | 2026-10-21 | Frontend testing setup | Installed `vitest` 5.0.5, `@vue/test-utils` 2.5.1 and `jsdom` 30.1.3 as dev dependencies. `npm audit`: 0 vulnerabilities, with no peer-dependency warnings. The lockfile also moved `vite` from 8.3.4 to 8.3.5, within the existing range. `npm test`: 1 of 1 passed. This smoke test describes existing behavior, so it passed on first run with no red phase. `npm run build` succeeded, with output identical to before, so the test files aren't bundled. |
 | 2026-10-21 | Frontend alert management (list, create, delete) | Red: against an empty `AlertsPanel.vue`, 4 of 4 new tests failed (`/api/alerts` not called; form and buttons not found). Green: 5 of 5 passed. After adding the panel to `App.vue`, the smoke test failed as expected, because its stub returned rates JSON for `/api/alerts` too. After changing the stub to answer by URL, 5 of 5 passed. `npm run build` succeeded. Manual check through the Vite proxy (`:5173`) with real HTTP and a throwaway database: the page and `AlertsPanel.vue` were served; `GET` → `[]`; `POST` → 201; an invalid `POST` → 400 with `detail`; `DELETE` → 204; `GET` → `[]`. Not checked by hand in a browser. Review correction (creation needs two valid, different currencies): the new test failed first (submit button not disabled with only `USD`). Then `npm test` passed 6 of 6, `npm run build` succeeded, and `dotnet test` passed 67 of 67 (backend unchanged). |
 | 2026-10-21 | Frontend alert evaluation | Red: 2 of 2 new tests failed (no "Evaluate alerts" button). The 6 existing tests still passed. Green: `npm test` 8 of 8 passed, `npm run build` succeeded, `dotnet test` 67 of 67 passed (backend unchanged). Not checked by hand in a browser. Review corrections: changed the message wording to "1 alert triggered" / "N alerts triggered", and cleared the message when a create or delete starts. The updated test failed first on the wording, then on the message still showing after a delete. After the fixes, `npm test` 8 of 8 passed, `npm run build` succeeded, and `dotnet test` 67 of 67 passed. |
+| 2026-10-21 | GitHub Actions CI | Workflow YAML parsed and checked for structure with the already-installed PyYAML 6.0.3: only `push` and `pull_request` triggers with no branch filters, `contents: read`, two independent jobs on `ubuntu-latest`, and the expected steps. Not checked with `actionlint`, which isn't installed. Ran the CI command sequences locally on Windows: `dotnet restore` / `build --no-restore` (0 warnings, 0 errors) / `test --no-build` (67 of 67), then in `frontend/` `npm ci` (0 vulnerabilities, lockfile unchanged) / `npm test` (8 of 8) / `npm run build` (succeeded). The workflow itself has not run on GitHub. |
 
 ## Known Limitations
 
@@ -419,7 +434,8 @@ Rates aren't stored in the database. Evaluation always uses the provider's curre
 - There are no users, authentication or notifications.
 - The alert currency dropdowns come from the rates view. Until rates have loaded, or if loading them fails, only `USD` is available. "Add alert" is then disabled, with the hint "Alerts can be created once exchange rates have loaded." The rates view's Refresh button can retry.
 - Backend error messages are shown as-is, including .NET's `(Parameter '…')` suffix.
-- The alert UI has been checked with component tests and with real HTTP calls through the Vite proxy, but not by hand in a browser.
+- The alert UI has been checked with component tests, real HTTP calls through the Vite proxy, and by hand in a browser (by the user).
+- The CI workflow has never run on GitHub (the project is delivered as a ZIP). Its commands were only run locally on Windows, not on Linux.
 
 ## Future Improvements
 
@@ -432,6 +448,7 @@ Rates aren't stored in the database. Evaluation always uses the provider's curre
 - Consistent error responses: `AddProblemDetails()` would give malformed-JSON and `404` responses ProblemDetails bodies, and clean messages could be returned without the .NET parameter suffix.
 - `GET /api/alerts/{id}`, so the `Location` header points to a readable resource.
 - User accounts so each user has their own alerts.
+- CI: cache NuGet and npm packages, pin the SDK with `global.json`, and lint the workflow with `actionlint`.
 
 ## Time Tracking
 
@@ -456,3 +473,4 @@ To be filled in manually. Claude does not estimate or record time.
 | 2026-10-21 | Frontend testing setup | |
 | 2026-10-21 | Frontend alert management | |
 | 2026-10-21 | Frontend alert evaluation | |
+| 2026-10-21 | GitHub Actions CI | |

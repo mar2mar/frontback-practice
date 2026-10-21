@@ -232,3 +232,22 @@ Important architectural decisions for RateWatch, and AI suggestions that were ac
   - Reloading the list shows the server's actual `triggeredAt` values.
   - The count comes straight from the endpoint's contract (only alerts triggered by this request).
 - **Source:** User specification (frontend Commit 3). The user added the wording and the clearing rule during review. Using a separate status element instead of the error area is an AI choice, accepted by the user.
+
+## 2026-10-21 — Continuous integration
+
+### One minimal GitHub Actions workflow with two independent jobs
+- **Decision:**
+  - `.github/workflows/ci.yml` runs on every `push` and `pull_request` (any branch), with `contents: read` permissions.
+  - `backend` job (`ubuntu-latest`, SDK `10.0.x`): `dotnet restore` / `build --no-restore` / `test --no-build` on `RateWatch.slnx`.
+  - `frontend` job (`ubuntu-latest`, Node `24`, working directory `frontend/`): `npm ci` / `npm test` / `npm run build`.
+  - Actions pinned to major versions: `checkout@v7`, `setup-dotnet@v6`, `setup-node@v7`.
+  - No caching, saved build outputs, secrets, Docker or deployment. `setup-node`'s automatic npm cache is turned off explicitly with `package-manager-cache: false`.
+- **Reason:**
+  - It runs the same commands developers use locally.
+  - The two jobs run in parallel and report backend and frontend failures separately.
+  - Read-only permissions are enough for building and testing.
+- **Trade-offs:**
+  - Without caching, every run downloads all packages.
+  - `10.0.x` and `24` follow the newest patch releases, so a new release could change results.
+  - The project is delivered as a ZIP, so the workflow only runs after the code is pushed to GitHub, and it hasn't run yet.
+- **Source:** User specification. The Node 24 choice, the action major versions and the floating `10.0.x` SDK are AI choices, accepted by the user. The user asked during review for the explicit `package-manager-cache: false`.
