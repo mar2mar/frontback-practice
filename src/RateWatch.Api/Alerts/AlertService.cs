@@ -29,6 +29,36 @@ public class AlertService(IAlertRepository repository, IExchangeRateProvider rat
     public Task<bool> DeleteAsync(int id, CancellationToken cancellationToken = default) =>
         repository.DeleteAsync(id, cancellationToken);
 
-    public Task<IReadOnlyList<RateAlert>> EvaluateAsync(CancellationToken cancellationToken = default) =>
-        throw new NotImplementedException();
+    public async Task<IReadOnlyList<RateAlert>> EvaluateAsync(CancellationToken cancellationToken = default)
+    {
+        var activeAlerts = await repository.ListActiveAsync(cancellationToken);
+
+        // Phase 1: fetch every snapshot first (one call per distinct base), so a provider failure
+        // aborts the run before any alert is persisted.
+        var snapshots = new Dictionary<string, RateSnapshot?>();
+        foreach (var baseCurrency in activeAlerts.Select(a => a.BaseCurrency).Distinct())
+        {
+            snapshots[baseCurrency] = await rateProvider.GetLatestRatesAsync(baseCurrency, cancellationToken);
+        }
+
+        // Phase 2: evaluate and conditionally persist, in active-alert order.
+        var now = timeProvider.GetUtcNow();
+        var triggered = new List<RateAlert>();
+        foreach (var alert in activeAlerts)
+        {
+            var rate = snapshots[alert.BaseCurrency]?.Rates.FirstOrDefault(r => r.Currency == alert.QuoteCurrency);
+            if (rate is null)
+            {
+                continue; // no rate available: skip, don't fail the run
+            }
+
+            // Trigger applies the rule in memory; the conditional update decides if this run wins.
+            if (alert.Trigger(rate.Rate, now) && await repository.TryMarkTriggeredAsync(alert.Id, now, cancellationToken))
+            {
+                triggered.Add(alert);
+            }
+        }
+
+        return triggered;
+    }
 }

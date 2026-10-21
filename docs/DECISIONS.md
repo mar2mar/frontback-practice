@@ -163,3 +163,20 @@ Important architectural decisions for RateWatch, and AI suggestions that were ac
   - "Trigger only once" is checked twice: in `RateAlert.Trigger`, which decides in memory, and in the SQL condition, which settles races. `ExecuteUpdateAsync` doesn't go through the entity.
   - The service must therefore return only alerts for which `TryMarkTriggeredAsync` returned `true`, not every alert for which `Trigger` returned `true`. If a concurrent request wins the race, the in-memory `TriggeredAt` on the losing request's (untracked) alert is never saved and must not be reported.
 - **Source:** User design (method name, `ExecuteUpdateAsync`, `AsNoTracking`). Removing `UpdateAsync`, converting to UTC inside the repository, and the fake's behavior were AI choices, accepted by the user. The user asked for the ordering by `Id` and the detached copies during review.
+
+### Evaluation orchestration in `AlertService.EvaluateAsync` (implemented)
+- **Decision:** two phases.
+  - **Phase 1:** fetch one snapshot per distinct base currency, one base at a time.
+  - **Phase 2:**
+    - Read one `now`.
+    - Then, in active-alert order: skip alerts with no rate, let `Trigger` decide in memory, and call `TryMarkTriggeredAsync` to confirm in the database.
+    - Only confirmed alerts are returned, in active-alert order.
+  - Provider exceptions are not caught.
+- **Reason:**
+  - The service only coordinates: the rule stays in the entity, and the race is settled by the repository.
+  - Fetching every snapshot before saving anything means a provider failure makes the whole run fail with nothing saved, so no trigger is lost without being reported.
+  - Returning only confirmed alerts keeps the response truthful when evaluations overlap.
+- **Trade-offs:**
+  - Calling the provider one base at a time would be slow with a real remote provider and many base currencies.
+  - A database error in phase 2 could still save some triggers without reporting them, because there's no transaction around the run.
+- **Source:** User specification (steps 1–8). The AI proposed a single loop with lazy fetching. The user adjusted it to two phases after the AI pointed out the partial-progress risk. Not catching provider exceptions is an AI choice, accepted by the user.
