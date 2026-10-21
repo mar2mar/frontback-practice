@@ -220,3 +220,15 @@ Important architectural decisions for RateWatch, and AI suggestions that were ac
   - Table and error styles are copied from the rates view, because scoped styles don't apply to child components.
   - Until rates load, only `USD` is available, so creation is disabled and a hint is shown. Creation is only enabled with two valid, different currencies, and selections are corrected automatically when the currency list changes.
 - **Source:** User specification (frontend Commit 2). The user added the two-currency rule during review. The copied styles, the fetch stub that answers in call order, and the 404 delete handling are AI choices, accepted by the user.
+
+### Alert evaluation in `AlertsPanel`
+- **Decision:**
+  - An "Evaluate alerts" button in `AlertsPanel` calls `POST /api/alerts/evaluate`.
+  - It shows the length of the returned array as "No alerts triggered", "1 alert triggered" or "N alerts triggered", in a `role="status"` element.
+  - It then reloads `GET /api/alerts`.
+  - Errors use the panel's existing error area.
+  - The message is cleared when a create or delete starts, so it never describes an older state of the list.
+- **Reason:**
+  - Reloading the list shows the server's actual `triggeredAt` values.
+  - The count comes straight from the endpoint's contract (only alerts triggered by this request).
+- **Source:** User specification (frontend Commit 3). The user added the wording and the clearing rule during review. Using a separate status element instead of the error area is an AI choice, accepted by the user.

@@ -8,6 +8,7 @@ const props = defineProps({
 
 const alerts = ref([])
 const error = ref('')
+const evaluationMessage = ref('')
 const loading = ref(false)
 const baseCurrency = ref('USD')
 const quoteCurrency = ref('EUR')
@@ -66,6 +67,7 @@ async function createAlert() {
   }
   loading.value = true
   error.value = ''
+  evaluationMessage.value = ''
   try {
     const response = await fetch('/api/alerts', {
       method: 'POST',
@@ -92,6 +94,7 @@ async function createAlert() {
 async function deleteAlert(id) {
   loading.value = true
   error.value = ''
+  evaluationMessage.value = ''
   try {
     const response = await fetch(`/api/alerts/${id}`, { method: 'DELETE' })
     if (response.status === 404) {
@@ -103,6 +106,27 @@ async function deleteAlert(id) {
     await loadAlerts()
   } catch (e) {
     error.value = `Could not delete alert: ${e.message}`
+  } finally {
+    loading.value = false
+  }
+}
+
+async function evaluateAlerts() {
+  loading.value = true
+  error.value = ''
+  evaluationMessage.value = ''
+  try {
+    const response = await fetch('/api/alerts/evaluate', { method: 'POST' })
+    if (!response.ok) {
+      error.value = `Could not evaluate alerts: ${await errorMessage(response)}`
+      return
+    }
+    const count = (await response.json()).length
+    evaluationMessage.value =
+      count === 0 ? 'No alerts triggered' : `${count} ${count === 1 ? 'alert' : 'alerts'} triggered`
+    await loadAlerts()
+  } catch (e) {
+    error.value = `Could not evaluate alerts: ${e.message}`
   } finally {
     loading.value = false
   }
@@ -136,6 +160,11 @@ onMounted(loadAlerts)
     </form>
     <p v-if="currencies.length < 2" class="hint">Alerts can be created once exchange rates have loaded.</p>
     <p v-else-if="baseCurrency === quoteCurrency" class="hint">Choose two different currencies.</p>
+
+    <div class="controls">
+      <button type="button" :disabled="loading" @click="evaluateAlerts">Evaluate alerts</button>
+      <span v-if="evaluationMessage" role="status">{{ evaluationMessage }}</span>
+    </div>
 
     <p v-if="error" role="alert" class="error">{{ error }}</p>
 

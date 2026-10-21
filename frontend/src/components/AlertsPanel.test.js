@@ -108,6 +108,45 @@ test('shows the backend ProblemDetails message when creation is rejected', async
   expect(fetchMock).toHaveBeenCalledTimes(2) // no reload after a failed create
 })
 
+function evaluateButton(wrapper) {
+  return wrapper.findAll('button').find((button) => button.text() === 'Evaluate alerts')
+}
+
+test('evaluates alerts, shows the triggered count, reloads the list, and clears the message on a later change', async () => {
+  const nowTriggered = { ...activeAlert, triggeredAt: '2026-10-21T11:00:00+00:00' }
+  const fetchMock = stubFetch(
+    { body: [activeAlert] },
+    { body: [nowTriggered] },
+    { body: [nowTriggered] },
+    { status: 204 },
+    { body: [] },
+  )
+  const wrapper = await mountPanel()
+
+  await evaluateButton(wrapper).trigger('click')
+  await flushPromises()
+
+  expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/alerts/evaluate', { method: 'POST' })
+  expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/alerts')
+  expect(wrapper.find('[role="status"]').text()).toBe('1 alert triggered')
+  expect(wrapper.find('tbody tr').text()).toContain('Triggered')
+
+  await wrapper.find('tbody tr button').trigger('click') // delete
+  await flushPromises()
+
+  expect(wrapper.find('[role="status"]').exists()).toBe(false)
+})
+
+test('shows a message when evaluation triggers nothing', async () => {
+  stubFetch({ body: [activeAlert] }, { body: [] }, { body: [activeAlert] })
+  const wrapper = await mountPanel()
+
+  await evaluateButton(wrapper).trigger('click')
+  await flushPromises()
+
+  expect(wrapper.find('[role="status"]').text()).toBe('No alerts triggered')
+})
+
 test('deletes an alert and reloads the list', async () => {
   const fetchMock = stubFetch({ body: [activeAlert] }, { status: 204 }, { body: [] })
   const wrapper = await mountPanel()
