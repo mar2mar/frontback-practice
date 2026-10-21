@@ -4,7 +4,7 @@ namespace RateWatch.Api.Alerts;
 /// An above-threshold, one-shot alert: it triggers once when the current rate is greater than <see cref="TargetRate"/>.
 /// </summary>
 /// <remarks>
-/// Constructor validation and evaluation are planned and not implemented yet (see NOTES.md).
+/// Evaluation is planned and not implemented yet (see NOTES.md).
 /// </remarks>
 public class RateAlert
 {
@@ -17,9 +17,26 @@ public class RateAlert
 
     public RateAlert(string baseCurrency, string quoteCurrency, decimal targetRate, DateTimeOffset createdAt)
     {
-        BaseCurrency = baseCurrency;
-        QuoteCurrency = quoteCurrency;
+        BaseCurrency = NormalizeCurrency(baseCurrency, nameof(baseCurrency));
+        QuoteCurrency = NormalizeCurrency(quoteCurrency, nameof(quoteCurrency));
+        if (QuoteCurrency == BaseCurrency)
+        {
+            throw new ArgumentException("Quote currency must differ from base currency.", nameof(quoteCurrency));
+        }
+
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(targetRate);
+
         TargetRate = targetRate;
-        CreatedAt = createdAt;
+        CreatedAt = createdAt.ToUniversalTime();
+    }
+
+    private static string NormalizeCurrency(string currency, string paramName)
+    {
+        if (currency is not { Length: 3 } || !currency.All(char.IsAsciiLetter))
+        {
+            throw new ArgumentException($"Currency must be a 3-letter code, got '{currency}'.", paramName);
+        }
+
+        return currency.ToUpperInvariant();
     }
 }

@@ -44,7 +44,7 @@ Keep the backend running while you use the frontend. The Vite dev server proxies
 
 ## Entity Contract: `RateAlert`
 
-**Implemented:** the properties below, and a constructor that assigns them without validation.
+**Implemented:** the properties below, and constructor validation (see the next table).
 
 | Property | Type | Notes |
 |---|---|---|
@@ -57,14 +57,19 @@ Keep the backend running while you use the frontend. The Vite dev server proxies
 
 All setters are private.
 
-**Planned constructor validation (not implemented yet; to be added test-first):**
+**Constructor validation (implemented and covered by `RateAlertTests`):**
 
 | Rule | On violation |
 |---|---|
-| Currencies are 3 ASCII letters, normalized to uppercase | `ArgumentException` |
-| Base and quote currencies differ | `ArgumentException` |
-| `TargetRate > 0` | `ArgumentOutOfRangeException` |
-| `CreatedAt` is converted to UTC | normalized |
+| Currencies are exactly 3 ASCII letters, normalized to uppercase | `ArgumentException` (`ParamName` = `baseCurrency` or `quoteCurrency`) |
+| Base and quote currencies differ (compared after normalization, so `USD`/`usd` is rejected) | `ArgumentException` (`ParamName` = `quoteCurrency`) |
+| `TargetRate > 0` | `ArgumentOutOfRangeException` (`ParamName` = `targetRate`) |
+| `CreatedAt` is converted to UTC; the moment in time is unchanged | normalized, no exception |
+| `TriggeredAt` is `null` when created | — |
+
+- **Null currencies** throw `ArgumentException`, not `ArgumentNullException`, so callers can handle every invalid currency the same way.
+- **Whitespace is not trimmed**, so `" US"` is rejected.
+- **Non-ASCII letters** are rejected (e.g. `ÜSD`).
 
 The service will check that a currency is supported by the rate provider. The entity only checks the format.
 
@@ -102,7 +107,8 @@ Status codes and response bodies will be defined when each endpoint is implement
 - **Backend:** one ASP.NET Core Minimal API project (`RateWatch.Api`) organized by feature folder (`Rates/`, `Alerts/`). There are no separate Domain or Infrastructure projects.
 - **Rates (implemented):** `IExchangeRateProvider` represents the external rate API. The app registers `FakeExchangeRateProvider`, and tests use `StubExchangeRateProvider`, which returns rates set explicitly by each test.
 - **Alerts:**
-  - `RateAlert`, `IAlertService` and `IAlertRepository`: interfaces defined, not implemented yet.
+  - `RateAlert` is implemented, with constructor validation. Evaluation is not implemented yet.
+  - `IAlertService` and `IAlertRepository`: interfaces defined, not implemented yet.
   - `IAlertService` will create, list and delete alerts, and run evaluation.
   - `IAlertRepository` is specific to alerts, not generic. Each method saves its own changes.
 - **Not used:** CQRS and MediatR.
@@ -148,14 +154,17 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 | 13 | No repository layer (use the DbContext directly) | Rejected | User chose a minimal, alert-specific `IAlertRepository` |
 | 14 | Defer startup migration to the endpoints checkpoint | Modified | User chose explicit migrations only, with no startup migration at all |
 | 15 | Add constructor validation test-first, in a later change (option B) | Accepted | Strict TDD: no validation code until there are tests for it |
+| 16 | Null currency throws `ArgumentException`, not `ArgumentNullException` | Accepted | Callers handle every invalid currency the same way |
+| 17 | Don't trim whitespace in currency codes | Accepted | Strict input; `" US"` is rejected |
+| 18 | The "currencies must differ" error names `quoteCurrency` | Accepted | The quote is the value that conflicts with the base |
 
 ## Testing Strategy
 
 - Behavior is written test-first (TDD). Tests and implementation are committed together once they pass.
-- **Unit tests:** domain behavior and the fake provider, using a deterministic `Random`, `FixedTimeProvider` and zero volatility where needed.
+- Tests focus on edge cases plus one or two representative happy-path tests. Overlapping cases are not added.
+- **Unit tests:** domain behavior (`RateAlertTests`) and the fake provider, using a deterministic `Random`, `FixedTimeProvider` and zero volatility where needed.
 - **Integration tests:** `WebApplicationFactory`, with `StubExchangeRateProvider` swapped in where exact rates matter.
 - **Planned:**
-  - Entity validation tests.
   - `AlertService` tests against an in-memory fake repository and the stub provider. These include boundary cases: rate equal to the target (no trigger), just above it (trigger), and an already-triggered alert (skipped).
   - Persistence tests with in-memory SQLite.
 
@@ -166,12 +175,13 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 | 2026-10-21 | Skeleton | `dotnet build` passed. 1 of 1 tests passed. Frontend build passed. Health checked through the Vite proxy with HTTP requests. |
 | 2026-10-21 | Simulated starter app | 12 of 12 tests passed. Frontend build passed. `/api/rates` checked through the proxy with HTTP requests. The UI was not checked in a browser. |
 | 2026-10-21 | `RateAlert` model and alert interfaces | `dotnet build`: 0 warnings, 0 errors. `dotnet test`: 12 of 12 passed. No new tests, by design. |
+| 2026-10-21 | `RateAlert` constructor validation (TDD) | Red: 18 of 21 new tests failed for the expected reasons (no exception thrown, not uppercase, offset not UTC). The 3 that passed check behavior plain assignment already gave. Green: 33 of 33 passed. Then trimmed to edge cases and one happy-path test (14 cases): `dotnet build` 0 warnings, 0 errors. `dotnet test`: 26 of 26 passed. |
 
 ## Known Limitations
 
 - Exchange rates are simulated. There's no real provider.
 - There's no persistence yet. Alert endpoints, the service and the repository are not implemented.
-- `RateAlert` doesn't validate its input yet.
+- `RateAlert` checks the format of currency codes, but not whether a code is a real ISO 4217 currency (e.g. `ABC` is accepted). The service will check that currencies are supported.
 - Evaluation only happens when requested. Alerts don't trigger on their own.
 - There are no users, authentication or notifications.
 - There are no frontend tests. The UI is checked by hand.
@@ -195,3 +205,4 @@ To be filled in manually. Claude does not estimate or record time.
 | 2026-10-21 | Skeleton | |
 | 2026-10-21 | Simulated starter app | |
 | 2026-10-21 | `RateAlert` model and alert interfaces | |
+| 2026-10-21 | `RateAlert` constructor validation | |
