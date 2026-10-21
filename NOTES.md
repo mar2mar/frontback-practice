@@ -201,7 +201,10 @@ On any error, nothing is saved.
     - `AddAsync` is implemented.
     - `ListAsync` is implemented. It uses `AsNoTracking()` and orders by `Id` descending, newest first. Sorting by `Id` works the same on every database, whereas SQLite can't sort `CreatedAt` in SQL.
     - `DeleteAsync` is implemented. It uses `ExecuteDeleteAsync`: one `DELETE ... WHERE Id = @id` statement, without loading the alert first. It returns `true` if a row was deleted.
-    - The other methods throw `NotImplementedException`. `AlertService` tests still use `FakeAlertRepository`.
+    - `ListActiveAsync` is implemented. It uses `AsNoTracking()` with `TriggeredAt == null`, ordered by `Id` ascending (oldest first), so evaluation runs in a predictable order.
+    - `TryMarkTriggeredAsync(alertId, triggeredAt)` is implemented. It runs one conditional `UPDATE ... SET TriggeredAt = @utc WHERE Id = @id AND TriggeredAt IS NULL` via `ExecuteUpdateAsync`, and returns `true` only if exactly one row changed. The time is converted to UTC before saving.
+    - The old `UpdateAsync(IEnumerable<RateAlert>)` was removed. Nothing used it, and `TryMarkTriggeredAsync` replaces it.
+    - `AlertService` tests still use `FakeAlertRepository`.
   - `RateAlert` and `AlertService` don't reference EF Core or SQLite.
   - `IAlertService` creates, lists and deletes alerts (implemented). Evaluation is not implemented yet.
   - `IAlertRepository` is specific to alerts, not generic. Each method saves its own changes.
@@ -238,18 +241,25 @@ On any error, nothing is saved.
 
 ### Evaluation Behavior (planned)
 
-**Step 1, the entity rule, is done:** `RateAlert.Trigger` (see Entity Contract).
+**Done:**
+- Step 1, the entity rule: `RateAlert.Trigger` (see Entity Contract).
+- Step 2, repository support: `ListActiveAsync` and `TryMarkTriggeredAsync` (see Persistence).
 
 **Remaining steps (planned):** `POST /api/alerts/evaluate` will call `IAlertService.EvaluateAsync`, which will:
-1. Load the active alerts (`TriggeredAt` is null).
+1. Load the active alerts with `ListActiveAsync()`, oldest first. The response keeps this order.
 2. Fetch the current rates from `IExchangeRateProvider` once for each base currency.
-3. Call `alert.Trigger(rate, now)` for each alert, with one `now` from `TimeProvider` for the whole run.
+3. Call `alert.Trigger(rate, now)` for each alert, with one `now` from `TimeProvider` for the whole run. This applies the strict `>` rule in memory.
 4. Skip an alert if its base currency has no snapshot or its quote currency has no rate. It isn't triggered and there's no error.
-5. Save the triggered alerts and return them. The endpoint will return `200 OK` with that array.
+5. For each alert where `Trigger` returned `true`, call `TryMarkTriggeredAsync(alert.Id, now)`. Return only the alerts where that call returned `true`.
+6. The endpoint will return `200 OK` with that array.
 
 Rates aren't stored in the database. Evaluation always uses the provider's current rates.
 
-**Concurrency (planned):** saving will use a conditional update (`... WHERE Id = @id AND TriggeredAt IS NULL`). If two evaluations run at the same time, only one can set `TriggeredAt` and report the alert. Running evaluate twice in a row is already safe, because the second run only loads untriggered alerts.
+**Concurrency (implemented in the repository):**
+- `TryMarkTriggeredAsync` lets the database decide. Its `UPDATE` only matches rows where `TriggeredAt IS NULL`, so when two evaluations try to trigger the same alert, only one gets an affected-row count of 1. The other gets 0 and returns `false`.
+- That means an alert can be triggered and reported at most once, and `TriggeredAt` is never overwritten.
+- Running evaluate twice in a row is also safe, because the second run only loads untriggered alerts.
+- No migration, row versioning or locking is needed.
 
 ## AI Collaboration Decisions
 
@@ -284,6 +294,9 @@ Rates aren't stored in the database. Evaluation always uses the provider's curre
 | 27 | Endpoint tests create a new `RateWatchApiFactory` in each test, instead of sharing one class fixture | Accepted | Each test starts with an empty database, so the list and delete assertions don't depend on other tests. Costs a short app startup per test. |
 | 28 | Map `ArgumentException` to a `400` ProblemDetails with try/catch inside the `POST` handler | Accepted | Only one endpoint needs it, so a global exception handler would be more than needed. Matches how `/api/rates` already returns `400`. |
 | 29 | Return `RateAlert` directly, with `Location: /api/alerts/{id}`, and constrain the delete route to `{id:int}` | Accepted | No DTO, consistent with `RateSnapshot`. `{id:int}` makes non-numeric IDs a plain `404`. |
+| 30 | Remove `IAlertRepository.UpdateAsync` instead of keeping it next to `TryMarkTriggeredAsync` | Accepted | Nothing called it (only two stubs that threw), and a generic save wouldn't protect concurrent evaluations. |
+| 31 | `TryMarkTriggeredAsync` converts `triggeredAt` to UTC itself | Accepted | The repository receives a plain `DateTimeOffset`, not the entity, so it can't rely on `Trigger` having done it. The test passes a `+02:00` time. |
+| 32 | The fake repository's `TryMarkTriggeredAsync` records calls and returns a value set by the test (default `true`) | Accepted | Same pattern as accepted decision 26: fake alerts have no IDs. Setting it to `false` lets service tests simulate losing a concurrent race. |
 
 ## Testing Strategy
 
@@ -311,11 +324,13 @@ Rates aren't stored in the database. Evaluation always uses the provider's curre
 | 2026-10-21 | Alert deletion: repository and service (TDD) | Red: 4 of 4 new test cases failed with `NotImplementedException`. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 40 of 40 passed. The development database's last-write time was unchanged by the test run. |
 | 2026-10-21 | Alert CRUD endpoints (TDD) | Red: 6 of 6 new test cases failed with `404 NotFound`, because the routes didn't exist yet. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 46 of 46 passed. The development database was unchanged and no temporary test files were left behind. Manual check against a throwaway database: `GET` → 200 `[]`; `POST` → 201 with `Location: /api/alerts/1`; unsupported currency, zero target and invalid code → 400 ProblemDetails; malformed JSON → 400 plain text; `DELETE /1` → 204, then 404; `DELETE /abc` → 404. |
 | 2026-10-21 | Evaluation step 1: `RateAlert.Trigger` (TDD) | Red: 5 of 5 new test cases failed with `NotImplementedException` (from a stub). Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 51 of 51 passed. |
+| 2026-10-21 | Evaluation step 2: `ListActiveAsync` and `TryMarkTriggeredAsync` (TDD) | Red: 4 of 4 new SQLite tests failed with `NotImplementedException`. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 55 of 55 passed. The development database was unchanged. Review follow-up: added `OrderBy(Id)` to `ListActiveAsync` and extended its test to three alerts with the middle one triggered, then 55 of 55 passed. The ordering test couldn't be shown failing first, because SQLite already returns rows in insertion order; it guards against a future regression. The fake's `ListActiveAsync` now returns detached copies. |
 
 ## Known Limitations
 
 - Exchange rates are simulated. There's no real provider.
-- Alert evaluation is only partly implemented. `RateAlert.Trigger` exists, but `AlertService.EvaluateAsync`, `AlertRepository.ListActiveAsync` and `UpdateAsync` throw `NotImplementedException`, and there is no `POST /api/alerts/evaluate`.
+- Alert evaluation is only partly implemented. `RateAlert.Trigger` and the repository support exist, but `AlertService.EvaluateAsync` throws `NotImplementedException`, and there is no `POST /api/alerts/evaluate`.
+- The "trigger only once" rule is enforced in two places: by `RateAlert.Trigger` in memory, and by `TriggeredAt IS NULL` in the repository's SQL. `ExecuteUpdateAsync` bypasses the entity, so the SQL condition is what protects concurrent runs.
 - `Trigger` doesn't validate `currentRate`. A zero or negative rate is never above a positive target, so it returns `false`.
 - Error responses are not fully consistent:
   - A malformed JSON body gets a framework `400` (in Development, a plain-text developer exception page) instead of ProblemDetails.
@@ -327,7 +342,7 @@ Rates aren't stored in the database. Evaluation always uses the provider's curre
 - The SQLite file path is relative to the API project folder, so run `dotnet run` and `dotnet ef` with `--project` from the repository root, as documented. Running the app from another folder would open a different, empty database.
 - SQLite stores `decimal` and `DateTimeOffset` as text, so EF Core can't filter or sort by `TargetRate` or `CreatedAt` in SQL.
 - Migrations run on every app start. That's fine for one local instance, but not suitable for several instances or controlled production releases.
-- `FakeAlertRepository` doesn't assign alert IDs, because `Id` has a private setter and is meant to come from the database. Its `ListAsync` returns alerts in insertion order. Its `DeleteAsync` records the requested IDs and returns a value the test sets, without matching alerts by ID. That's enough for the service's delegation tests; real deletion by ID is tested against SQLite.
+- `FakeAlertRepository` doesn't assign alert IDs, because `Id` has a private setter and is meant to come from the database. Its `ListAsync` returns alerts in insertion order. Its `DeleteAsync` records the requested IDs and returns a value the test sets, without matching alerts by ID. That's enough for the service's delegation tests; real deletion by ID is tested against SQLite. Its `TryMarkTriggeredAsync` works the same way: it records `(alertId, triggeredAt)` and returns `MarkTriggeredResult`, which is `true` by default and can be set to `false` to simulate losing a concurrent race. Its `ListActiveAsync` returns *copies* of the alerts with `TriggeredAt == null`, built with the `RateAlert` constructor, matching the real repository's `AsNoTracking`. So `Trigger()` calls made by the service don't change the fake's stored alerts. A successful `TryMarkTriggeredAsync` doesn't mark the stored alert either. So in the fake, a second evaluation still sees the same alerts as active. Repeated evaluation and one-shot behavior must be tested against SQLite, in repository or endpoint tests.
 - `RateAlert` checks the format of currency codes, but not whether a code is a real ISO 4217 currency (e.g. `ABC` is accepted). The service will check that currencies are supported.
 - Evaluation only happens when requested. Alerts don't trigger on their own.
 - There are no users, authentication or notifications.
@@ -363,3 +378,4 @@ To be filled in manually. Claude does not estimate or record time.
 | 2026-10-21 | Alert deletion: repository and service | |
 | 2026-10-21 | Alert CRUD endpoints | |
 | 2026-10-21 | Evaluation step 1: `RateAlert.Trigger` | |
+| 2026-10-21 | Evaluation step 2: repository conditional persistence | |

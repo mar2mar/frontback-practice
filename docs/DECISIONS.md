@@ -149,3 +149,17 @@ Important architectural decisions for RateWatch, and AI suggestions that were ac
   - The plain array matches `IAlertService.EvaluateAsync`'s return type.
   - The conditional update needs no migration and makes sure an alert is triggered and reported only once, even when two evaluations overlap.
 - **Source:** User decisions. These were options (a) to (c) and the open questions from the AI's evaluation analysis.
+
+### Conditional update in the repository (implemented)
+- **Decision:**
+  - `IAlertRepository.TryMarkTriggeredAsync(alertId, triggeredAt)` runs one `ExecuteUpdateAsync`: `UPDATE RateAlerts SET TriggeredAt = @utc WHERE Id = @id AND TriggeredAt IS NULL`. It returns `true` only if exactly one row changed.
+  - `ListActiveAsync` uses `AsNoTracking()` and orders by `Id` ascending, so evaluation order and response order are predictable.
+  - The unused `UpdateAsync` was removed.
+  - The test fake's `ListActiveAsync` returns detached copies, built with the `RateAlert` constructor, to match `AsNoTracking`.
+- **Reason:**
+  - The database settles races between overlapping evaluations: only one request can change a row from `NULL`. So an alert is reported at most once and `TriggeredAt` is never overwritten.
+  - It needs no migration, no concurrency token and no locking, and it's portable to PostgreSQL and SQL Server.
+- **Trade-offs:**
+  - "Trigger only once" is checked twice: in `RateAlert.Trigger`, which decides in memory, and in the SQL condition, which settles races. `ExecuteUpdateAsync` doesn't go through the entity.
+  - The service must therefore return only alerts for which `TryMarkTriggeredAsync` returned `true`, not every alert for which `Trigger` returned `true`. If a concurrent request wins the race, the in-memory `TriggeredAt` on the losing request's (untracked) alert is never saved and must not be reported.
+- **Source:** User design (method name, `ExecuteUpdateAsync`, `AsNoTracking`). Removing `UpdateAsync`, converting to UTC inside the repository, and the fake's behavior were AI choices, accepted by the user. The user asked for the ordering by `Id` and the detached copies during review.

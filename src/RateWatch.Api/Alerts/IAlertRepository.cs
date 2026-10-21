@@ -11,12 +11,16 @@ public interface IAlertRepository
     /// <summary>All alerts, newest first (ordered by Id).</summary>
     Task<IReadOnlyList<RateAlert>> ListAsync(CancellationToken cancellationToken = default);
 
-    /// <summary>Alerts that have not been triggered (TriggeredAt is null).</summary>
+    /// <summary>Alerts that have not been triggered (TriggeredAt is null), oldest first (ordered by Id).</summary>
     Task<IReadOnlyList<RateAlert>> ListActiveAsync(CancellationToken cancellationToken = default);
 
     /// <returns>False if no alert has the given id.</returns>
     Task<bool> DeleteAsync(int id, CancellationToken cancellationToken = default);
 
-    /// <summary>Saves changes to existing alerts, e.g. alerts marked as triggered.</summary>
-    Task UpdateAsync(IEnumerable<RateAlert> alerts, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Sets TriggeredAt (stored as UTC) only if the alert exists and has not been triggered yet.
+    /// Safe under concurrent evaluation: at most one caller can trigger a given alert.
+    /// </summary>
+    /// <returns>True only if this call triggered the alert.</returns>
+    Task<bool> TryMarkTriggeredAsync(int alertId, DateTimeOffset triggeredAt, CancellationToken cancellationToken = default);
 }

@@ -116,4 +116,73 @@ public sealed class AlertRepositoryTests : IDisposable
         await using var readDb = new AppDbContext(_options);
         Assert.Single(await readDb.RateAlerts.ToListAsync());
     }
+
+    [Fact]
+    public async Task TryMarkTriggered_sets_utc_TriggeredAt_on_active_alert()
+    {
+        var alert = await AddAlertAsync("EUR");
+        var triggeredAt = new DateTimeOffset(2026, 10, 21, 14, 0, 0, TimeSpan.FromHours(2));
+
+        Assert.True(await TryMarkTriggeredAsync(alert.Id, triggeredAt));
+
+        var stored = await FindAsync(alert.Id);
+        Assert.Equal(TimeSpan.Zero, stored.TriggeredAt!.Value.Offset);
+        Assert.Equal(triggeredAt.UtcDateTime, stored.TriggeredAt.Value.UtcDateTime);
+    }
+
+    [Fact]
+    public async Task TryMarkTriggered_twice_returns_false_and_keeps_first_TriggeredAt()
+    {
+        var alert = await AddAlertAsync("EUR");
+        var first = new DateTimeOffset(2026, 10, 21, 11, 0, 0, TimeSpan.Zero);
+        await TryMarkTriggeredAsync(alert.Id, first);
+
+        Assert.False(await TryMarkTriggeredAsync(alert.Id, first.AddHours(1)));
+
+        Assert.Equal(first, (await FindAsync(alert.Id)).TriggeredAt);
+    }
+
+    [Fact]
+    public async Task TryMarkTriggered_unknown_id_returns_false_and_changes_nothing()
+    {
+        var alert = await AddAlertAsync("EUR");
+
+        Assert.False(await TryMarkTriggeredAsync(alert.Id + 1, DateTimeOffset.UtcNow));
+
+        Assert.Null((await FindAsync(alert.Id)).TriggeredAt);
+    }
+
+    [Fact]
+    public async Task ListActive_excludes_triggered_alerts_and_orders_by_id()
+    {
+        var first = await AddAlertAsync("EUR");
+        var triggered = await AddAlertAsync("GBP");
+        var last = await AddAlertAsync("JPY");
+        await TryMarkTriggeredAsync(triggered.Id, DateTimeOffset.UtcNow);
+
+        await using var db = new AppDbContext(_options);
+        var alerts = await new AlertRepository(db).ListActiveAsync();
+
+        Assert.Equal([first.Id, last.Id], alerts.Select(a => a.Id));
+    }
+
+    private async Task<RateAlert> AddAlertAsync(string quoteCurrency)
+    {
+        var alert = new RateAlert("USD", quoteCurrency, 0.95m, new DateTimeOffset(2026, 10, 21, 10, 0, 0, TimeSpan.Zero));
+        await using var db = new AppDbContext(_options);
+        await new AlertRepository(db).AddAsync(alert);
+        return alert;
+    }
+
+    private async Task<bool> TryMarkTriggeredAsync(int alertId, DateTimeOffset triggeredAt)
+    {
+        await using var db = new AppDbContext(_options);
+        return await new AlertRepository(db).TryMarkTriggeredAsync(alertId, triggeredAt);
+    }
+
+    private async Task<RateAlert> FindAsync(int alertId)
+    {
+        await using var db = new AppDbContext(_options);
+        return await db.RateAlerts.SingleAsync(a => a.Id == alertId);
+    }
 }

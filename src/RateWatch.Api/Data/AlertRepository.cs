@@ -17,14 +17,27 @@ public class AlertRepository(AppDbContext db) : IAlertRepository
             .OrderByDescending(a => a.Id)
             .ToListAsync(cancellationToken);
 
-    public Task<IReadOnlyList<RateAlert>> ListActiveAsync(CancellationToken cancellationToken = default) =>
-        throw new NotImplementedException();
+    public async Task<IReadOnlyList<RateAlert>> ListActiveAsync(CancellationToken cancellationToken = default) =>
+        await db.RateAlerts
+            .AsNoTracking()
+            .Where(a => a.TriggeredAt == null)
+            .OrderBy(a => a.Id)
+            .ToListAsync(cancellationToken);
 
     public async Task<bool> DeleteAsync(int id, CancellationToken cancellationToken = default) =>
         await db.RateAlerts
             .Where(a => a.Id == id)
             .ExecuteDeleteAsync(cancellationToken) > 0;
 
-    public Task UpdateAsync(IEnumerable<RateAlert> alerts, CancellationToken cancellationToken = default) =>
-        throw new NotImplementedException();
+    // One conditional UPDATE: the database decides the winner, so concurrent evaluations
+    // can't both trigger (or overwrite) the same alert.
+    public async Task<bool> TryMarkTriggeredAsync(int alertId, DateTimeOffset triggeredAt,
+        CancellationToken cancellationToken = default)
+    {
+        DateTimeOffset? triggeredAtUtc = triggeredAt.ToUniversalTime();
+        var updated = await db.RateAlerts
+            .Where(a => a.Id == alertId && a.TriggeredAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(a => a.TriggeredAt, triggeredAtUtc), cancellationToken);
+        return updated == 1;
+    }
 }
