@@ -1,6 +1,11 @@
+using Microsoft.EntityFrameworkCore;
+using RateWatch.Api.Data;
 using RateWatch.Api.Rates;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddDbContext<AppDbContext>(
+    options => options.UseSqlite(builder.Configuration.GetConnectionString("RateWatch")));
 
 builder.Services.AddSingleton<IExchangeRateProvider>(
     _ => new FakeExchangeRateProvider(TimeProvider.System, Random.Shared));

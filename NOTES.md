@@ -30,6 +30,25 @@ Status markers: **Implemented** = in the code and verified. **Planned** = agreed
 
 Keep the backend running while you use the frontend. The Vite dev server proxies all `/api` requests to the backend at http://localhost:5080.
 
+## Database Setup
+
+Migrations are applied explicitly; the app never migrates on startup. Run these commands from the repository root:
+
+```powershell
+dotnet tool restore                                   # installs the pinned dotnet-ef (.config/dotnet-tools.json)
+dotnet ef database update --project src/RateWatch.Api # creates or updates src/RateWatch.Api/ratewatch.db
+```
+
+- Add a migration after changing the model:
+
+  ```powershell
+  dotnet ef migrations add <Name> --project src/RateWatch.Api --output-dir Data/Migrations
+  ```
+
+- Reset the local database: delete `src/RateWatch.Api/ratewatch.db`, then run `dotnet ef database update` again.
+- The connection string (`ConnectionStrings:RateWatch` in `appsettings.json`) is `Data Source=ratewatch.db`, a path relative to the API project folder. Both `dotnet run --project` and `dotnet ef --project` use that folder, so they open the same file.
+- The database file is git-ignored (`*.db`).
+
 ## Business Rules and Assumptions
 
 - Alerts are **above-threshold only**. There are no "below" alerts.
@@ -123,22 +142,31 @@ Status codes and response bodies will be defined when each endpoint is implement
 - **Alerts:**
   - `RateAlert` is implemented, with constructor validation. Evaluation is not implemented yet.
   - `AlertService` implements `IAlertService`. Only `CreateAsync` is implemented so far.
-  - `IAlertRepository`: interface only. There is no real implementation yet; tests use `FakeAlertRepository`.
+  - `AlertRepository` (in `Data/`) implements `IAlertRepository` with EF Core. Only `AddAsync` is implemented; the other methods throw `NotImplementedException`. `AlertService` tests still use `FakeAlertRepository`.
+  - `RateAlert` and `AlertService` don't reference EF Core or SQLite.
   - `IAlertService` will create, list and delete alerts, and run evaluation.
   - `IAlertRepository` is specific to alerts, not generic. Each method saves its own changes.
 - **Not used:** CQRS and MediatR.
 - **Frontend:** Vue 3 and Vite (JavaScript). The Vite dev proxy forwards `/api` to the backend, so no CORS setup is needed.
 
-### Persistence: SQLite and EF Core (planned)
+### Persistence: SQLite and EF Core
 
-- **Setup:** EF Core with the SQLite provider, and one `RateAlerts` table.
+- **Implemented:**
+  - `AppDbContext` with one `RateAlerts` table. The mapping is configured in `OnModelCreating`: currencies have a maximum length of 3, and `TargetRate` uses `HasPrecision(18, 6)`.
+  - The `InitialCreate` migration, in `Data/Migrations`.
+  - `AppDbContext` registered with `UseSqlite`.
+- **Not registered yet:** `AlertRepository` and `AlertService`. They'll be registered with the endpoints.
+- **Packages:**
+  - `Microsoft.EntityFrameworkCore.Sqlite` 10.0.13.
+  - `Microsoft.EntityFrameworkCore.Design` 10.0.13, design-time only.
+  - The `dotnet-ef` 10.0.13 local tool.
+- **Loading alerts:** EF Core loads a `RateAlert` through its constructor, so the validation also runs when reading. Rows in the database are always valid, because they can only be written through the entity.
 - **Portability:** there's no provider-specific business logic. Moving to PostgreSQL or SQL Server should only need a different provider package and `Use...()` call, plus regenerated migrations.
 - **Number and time columns:**
   - SQLite stores `decimal` and `DateTimeOffset` as text, so EF Core can't translate comparisons or ordering on them into SQL.
   - Therefore the threshold comparison runs in C#, and lists are ordered by `Id`, not `CreatedAt`.
-  - `TargetRate` will be mapped with `HasPrecision(18, 6)`, which gives proper numeric columns on PostgreSQL and SQL Server.
-- **Migrations:** applied explicitly with `dotnet ef database update`, not at application startup.
-- **Database file:** the local SQLite file is git-ignored (`*.db`).
+  - `HasPrecision(18, 6)` on `TargetRate` gives proper numeric columns on PostgreSQL and SQL Server. SQLite ignores it.
+- **Migrations:** applied explicitly with `dotnet ef database update`, not at application startup (see Database Setup).
 
 ### Evaluation Behavior (planned)
 
@@ -174,6 +202,9 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 | 18 | The "currencies must differ" error names `quoteCurrency` | Accepted | The quote is the value that conflicts with the base |
 | 19 | Check currency support with the existing `GetLatestRatesAsync(base)` instead of adding a "supported currencies" method to the provider | Accepted | Keeps the provider interface unchanged. One extra provider call per create is acceptable. |
 | 20 | In `CreateAsync`, run entity validation before calling the provider | Accepted | Invalid input fails fast, and the provider only receives normalized codes |
+| 21 | Use EF Core 10.0.13 instead of 10.0.1 | Accepted | 10.0.1 pulled in packages with known high-severity vulnerabilities (`SQLitePCLRaw.lib.e_sqlite3`, `System.Security.Cryptography.Pkcs`). 10.0.13 has none. |
+| 22 | Persistence tests use in-memory SQLite and apply the real migrations with `Migrate()`, not `EnsureCreated()` | Accepted | Tests the actual migration, and fails if the model has changes no migration covers |
+| 23 | Register `AppDbContext` now, and register the repository and service later with the endpoints | Accepted | `dotnet ef` needs the context registered. Nothing uses the repository or service yet, so registering them can wait. |
 
 ## Testing Strategy
 
@@ -181,9 +212,10 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 - Tests focus on edge cases plus one or two representative happy-path tests. Overlapping cases are not added.
 - **Unit tests:** domain behavior (`RateAlertTests`), `AlertService` (`AlertServiceTests`, using `FakeAlertRepository` and `StubExchangeRateProvider`) and the fake provider, using a deterministic `Random`, `FixedTimeProvider` and zero volatility where needed.
 - **Integration tests:** `WebApplicationFactory`, with `StubExchangeRateProvider` swapped in where exact rates matter.
+- **Persistence tests:** `AlertRepositoryTests`. Each test class instance gets its own in-memory SQLite database, built with the real migrations. Data is read back through a separate `AppDbContext`, so the test checks what was actually stored.
 - **Planned:**
   - `AlertService` tests for list, delete and evaluate. Evaluation tests will include boundary cases: rate equal to the target (no trigger), just above it (trigger), and an already-triggered alert (skipped).
-  - Persistence tests with in-memory SQLite.
+  - Persistence tests for the remaining repository methods.
 
 ## Verification Log
 
@@ -194,11 +226,14 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 | 2026-10-21 | `RateAlert` model and alert interfaces | `dotnet build`: 0 warnings, 0 errors. `dotnet test`: 12 of 12 passed. No new tests, by design. |
 | 2026-10-21 | `RateAlert` constructor validation (TDD) | Red: 18 of 21 new tests failed for the expected reasons (no exception thrown, not uppercase, offset not UTC). The 3 that passed check behavior plain assignment already gave. Green: 33 of 33 passed. Then trimmed to edge cases and one happy-path test (14 cases): `dotnet build` 0 warnings, 0 errors. `dotnet test`: 26 of 26 passed. |
 | 2026-10-21 | `AlertService.CreateAsync` (TDD) | Red: 4 of 4 new tests failed with `NotImplementedException`. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 30 of 30 passed. |
+| 2026-10-21 | SQLite persistence: `AlertRepository.AddAsync` (TDD) | `dotnet list package --vulnerable`: none found. Red: 1 of 1 new test failed with `NotImplementedException`, after `Migrate()` had succeeded. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 31 of 31 passed. Ran `dotnet ef database update` and it created `src/RateWatch.Api/ratewatch.db`, which git ignores. Confirmed the app's content root is `src/RateWatch.Api`. |
 
 ## Known Limitations
 
 - Exchange rates are simulated. There's no real provider.
-- There's no persistence yet. Alert endpoints and the repository are not implemented. `AlertService` implements only `CreateAsync` and isn't registered in dependency injection.
+- There are no alert endpoints. `AlertService` implements only `CreateAsync`, and `AlertRepository` implements only `AddAsync`. Neither is registered in dependency injection.
+- The SQLite file path is relative to the API project folder, so run `dotnet run` and `dotnet ef` with `--project` from the repository root, as documented. Running the app from another folder would open a different, empty database.
+- SQLite stores `decimal` and `DateTimeOffset` as text, so EF Core can't filter or sort by `TargetRate` or `CreatedAt` in SQL.
 - `FakeAlertRepository` doesn't assign alert IDs, because `Id` has a private setter and is meant to come from the database. It will need a way to assign IDs before list and delete tests.
 - `RateAlert` checks the format of currency codes, but not whether a code is a real ISO 4217 currency (e.g. `ABC` is accepted). The service will check that currencies are supported.
 - Evaluation only happens when requested. Alerts don't trigger on their own.
@@ -211,7 +246,7 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 - Background polling, for example with a hosted service.
 - Notifications, such as email or webhooks.
 - A real exchange-rate provider with caching and retries.
-- PostgreSQL or SQL Server for production.
+- PostgreSQL or SQL Server for production: switch the provider package and the `Use...()` call, regenerate the migrations, and use connection strings per environment.
 - User accounts so each user has their own alerts.
 - Frontend tests with Vitest.
 
@@ -226,3 +261,4 @@ To be filled in manually. Claude does not estimate or record time.
 | 2026-10-21 | `RateAlert` model and alert interfaces | |
 | 2026-10-21 | `RateAlert` constructor validation | |
 | 2026-10-21 | `AlertService.CreateAsync` | |
+| 2026-10-21 | SQLite persistence for creating alerts | |

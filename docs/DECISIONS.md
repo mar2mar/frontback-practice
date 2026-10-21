@@ -92,3 +92,20 @@ Important architectural decisions for RateWatch, and AI suggestions that were ac
 - **Decision:** Persistence will use EF Core with SQLite and no provider-specific business logic. Threshold comparisons will run in C#, lists will be ordered by `Id`, and migrations will be applied with `dotnet ef database update`, never at startup.
 - **Reason:** SQLite stores `decimal` and `DateTimeOffset` as text, so EF Core can't translate comparisons or ordering on them into SQL. Applying migrations explicitly keeps integration tests away from the local database file.
 - **Source:** AI proposal, modified by the user: explicit migrations only, with no startup migration at all.
+
+## 2026-10-21 — SQLite persistence for creating alerts
+
+### EF Core persistence in `Data/`
+- **Decision:**
+  - `AppDbContext` and `AlertRepository` live in `src/RateWatch.Api/Data/`, and the migrations in `Data/Migrations/`.
+  - The mapping is configured in `OnModelCreating`, with no separate configuration classes.
+  - `RateAlert` and `AlertService` don't reference EF Core.
+- **Reason:** Keeps the domain and the service independent of the database, without adding projects or layers.
+- **Source:** User requirement. The AI implemented it.
+
+### Pinned, patched EF Core tooling
+- **Decision:** Use EF Core packages 10.0.13, and pin `dotnet-ef` 10.0.13 in a local tool manifest (`.config/dotnet-tools.json`).
+- **Reason:**
+  - 10.0.1 pulled in packages with known high-severity vulnerabilities, and 10.0.13 reports none.
+  - A local tool manifest means anyone can install the same CLI version with `dotnet tool restore`.
+- **Source:** AI change during implementation, accepted by the user.
