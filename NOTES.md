@@ -115,7 +115,7 @@ On any error, nothing is saved.
 
 **`EvaluateAsync`:** not implemented. It throws `NotImplementedException`.
 
-`AlertService` is not registered in dependency injection yet. Registration comes with the endpoints and repository.
+`AlertService` and `AlertRepository` are registered as scoped services, and `TimeProvider.System` as a singleton.
 
 ## API Contracts
 
@@ -135,16 +135,52 @@ On any error, nothing is saved.
   ```
 - `400` (ProblemDetails): unsupported base currency.
 
+**Alert JSON** (returned by the alert endpoints; serialized from `RateAlert`):
+
+```json
+{
+  "id": 1,
+  "baseCurrency": "USD",
+  "quoteCurrency": "EUR",
+  "targetRate": 0.95,
+  "createdAt": "2026-10-21T17:56:38.0182181+00:00",
+  "triggeredAt": null
+}
+```
+
+**`POST /api/alerts`**: create an alert.
+- Request body:
+  ```json
+  { "baseCurrency": "usd", "quoteCurrency": "EUR", "targetRate": 0.95 }
+  ```
+  Currencies are case-insensitive and stored in uppercase.
+- `201 Created`: the alert JSON, with a `Location: /api/alerts/{id}` header.
+- `400 Bad Request` (`application/problem+json`): invalid currency format, base and quote the same, unsupported currency, or `targetRate <= 0`. The error message is in `detail`, for example:
+  ```json
+  {
+    "type": "https://tools.ietf.org/html/rfc9110#section-15.5.1",
+    "title": "Bad Request",
+    "status": 400,
+    "detail": "Unsupported quote currency 'XYZ'. (Parameter 'quoteCurrency')"
+  }
+  ```
+- `400 Bad Request` for a malformed JSON body. ASP.NET Core returns this before the handler runs, so it isn't ProblemDetails (see Known Limitations).
+
+**`GET /api/alerts`**: list all saved alerts.
+- `200 OK`: an array of alert JSON, newest first (by `id`). `[]` when there are no alerts.
+- Doesn't fetch rates or evaluate alerts.
+
+**`DELETE /api/alerts/{id}`**: delete an alert permanently.
+- `204 No Content`: the alert was deleted.
+- `404 Not Found` (empty body): no alert with that ID. A non-integer ID also gets `404`, because the route only matches integers (`{id:int}`).
+
 ### Planned (not implemented)
 
 | Method | Route | Purpose |
 |---|---|---|
-| `POST` | `/api/alerts` | Create an alert (`baseCurrency`, `quoteCurrency`, `targetRate`) |
-| `GET` | `/api/alerts` | List all alerts, newest first |
-| `DELETE` | `/api/alerts/{id}` | Delete an alert. `404` if not found. |
 | `POST` | `/api/alerts/evaluate` | Evaluate active alerts and return those triggered by this run |
 
-Status codes and response bodies will be defined when each endpoint is implemented. Validation errors will return `400` (ProblemDetails).
+The status codes and response body will be defined when the endpoint is implemented.
 
 ## Architecture
 
@@ -161,7 +197,12 @@ Status codes and response bodies will be defined when each endpoint is implement
   - `RateAlert` and `AlertService` don't reference EF Core or SQLite.
   - `IAlertService` will create, list and delete alerts, and run evaluation.
   - `IAlertRepository` is specific to alerts, not generic. Each method saves its own changes.
-- **Not used:** CQRS and MediatR.
+- **Alert endpoints:**
+  - The three handlers are Minimal API handlers written inline in `Program.cs`, next to `/api/health` and `/api/rates`. They call `IAlertService` only.
+  - `POST` binds a `CreateAlertRequest` record.
+  - Responses return `RateAlert` directly, with no response DTO, which matches how `/api/rates` returns `RateSnapshot`.
+  - The `POST` handler catches `ArgumentException`, which also covers `ArgumentOutOfRangeException`, and returns a `400` ProblemDetails. This reuses the existing exception behavior; there's no result-type framework.
+- **Not used:** CQRS, MediatR, controllers or mapping libraries.
 - **Frontend:** Vue 3 and Vite (JavaScript). The Vite dev proxy forwards `/api` to the backend, so no CORS setup is needed.
 
 ### Persistence: SQLite and EF Core
@@ -170,7 +211,7 @@ Status codes and response bodies will be defined when each endpoint is implement
   - `AppDbContext` with one `RateAlerts` table. The mapping is configured in `OnModelCreating`: currencies have a maximum length of 3, and `TargetRate` uses `HasPrecision(18, 6)`.
   - The `InitialCreate` migration, in `Data/Migrations`.
   - `AppDbContext` registered with `UseSqlite`.
-- **Not registered yet:** `AlertRepository` and `AlertService`. They'll be registered with the endpoints.
+- **Registered (scoped):** `AlertRepository` and `AlertService`, sharing the request's `AppDbContext`.
 - **Packages:**
   - `Microsoft.EntityFrameworkCore.Sqlite` 10.0.13.
   - `Microsoft.EntityFrameworkCore.Design` 10.0.13, design-time only.
@@ -227,13 +268,16 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 | 24 | Isolate integration tests with `RateWatchApiFactory`: each instance gets its own temporary SQLite file, deleted on dispose | Accepted | Integration tests never touch the development database. In-memory SQLite was rejected: the database disappears when the startup migration closes its connection. |
 | 25 | `AlertRepository.DeleteAsync` uses `ExecuteDeleteAsync` instead of find, remove, then `SaveChanges` | Accepted | One SQL statement with no extra query, and the affected-row count gives the true/false result directly. Translated the same way on every EF Core relational provider. |
 | 26 | The fake repository's `DeleteAsync` records requested IDs and returns a value set by the test | Accepted | Alerts in the fake have no IDs (no reflection, `Id` unchanged), so it can't match by ID. The service test only needs to prove the call is passed through. |
+| 27 | Endpoint tests create a new `RateWatchApiFactory` in each test, instead of sharing one class fixture | Pending review | Each test starts with an empty database, so the list and delete assertions don't depend on other tests. Costs a short app startup per test. |
+| 28 | Map `ArgumentException` to a `400` ProblemDetails with try/catch inside the `POST` handler | Pending review | Only one endpoint needs it, so a global exception handler would be more than needed. Matches how `/api/rates` already returns `400`. |
+| 29 | Return `RateAlert` directly, with `Location: /api/alerts/{id}`, and constrain the delete route to `{id:int}` | Pending review | No DTO, consistent with `RateSnapshot`. `{id:int}` makes non-numeric IDs a plain `404`. |
 
 ## Testing Strategy
 
 - Behavior is written test-first (TDD). Tests and implementation are committed together once they pass.
 - Tests focus on edge cases plus one or two representative happy-path tests. Overlapping cases are not added.
 - **Unit tests:** domain behavior (`RateAlertTests`), `AlertService` (`AlertServiceTests`, using `FakeAlertRepository` and `StubExchangeRateProvider`) and the fake provider, using a deterministic `Random`, `FixedTimeProvider` and zero volatility where needed.
-- **Integration tests:** `RateWatchApiFactory`, a `WebApplicationFactory<Program>` that overrides `ConnectionStrings:RateWatch` with a temporary SQLite file for each factory instance. `StubExchangeRateProvider` is swapped in where exact rates matter. `DatabaseStartupTests` checks that startup migrates a fresh database and that a restart keeps existing alerts.
+- **Integration tests:** `RateWatchApiFactory`, a `WebApplicationFactory<Program>` that overrides `ConnectionStrings:RateWatch` with a temporary SQLite file for each factory instance. `StubExchangeRateProvider` is swapped in where exact rates matter. `DatabaseStartupTests` checks that startup migrates a fresh database and that a restart keeps existing alerts. `AlertsEndpointTests` creates a new factory in each test, so each test starts with an empty database. It checks only HTTP behavior: status codes, `Location`, JSON shape, and that changes are saved. The validation rules themselves are covered by the unit tests.
 - **Persistence tests:** `AlertRepositoryTests`. Each test class instance gets its own in-memory SQLite database, built with the real migrations. Data is read back through a separate `AppDbContext`, so the test checks what was actually stored.
 - **Planned:**
   - `AlertService` tests for evaluate. They will include boundary cases: rate equal to the target (no trigger), just above it (trigger), and an already-triggered alert (skipped).
@@ -252,11 +296,18 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 | 2026-10-21 | Automatic database initialization at startup (TDD) | Red: 2 of 2 new tests failed for the expected reasons (no database file created; `no such table: RateAlerts`). Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 33 of 33 passed, run twice. The development database's last-write time was unchanged after the test runs, and no temporary test files were left behind. Manual check: started the app against a fresh file twice. `/api/health` returned ok both times. `dotnet ef migrations list` showed `InitialCreate` as applied in that file and `(Pending)` in an empty one. The app also started against the existing development database. |
 | 2026-10-21 | Alert listing: repository and service (TDD) | Red: 3 of 3 new tests failed with `NotImplementedException`. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 36 of 36 passed. The development database's last-write time was unchanged by a test run. It had changed since the previous check only because of that checkpoint's manual app start, since `Migrate()` writes EF's migration-lock table on each start. |
 | 2026-10-21 | Alert deletion: repository and service (TDD) | Red: 4 of 4 new test cases failed with `NotImplementedException`. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 40 of 40 passed. The development database's last-write time was unchanged by the test run. |
+| 2026-10-21 | Alert CRUD endpoints (TDD) | Red: 6 of 6 new test cases failed with `404 NotFound`, because the routes didn't exist yet. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 46 of 46 passed. The development database was unchanged and no temporary test files were left behind. Manual check against a throwaway database: `GET` → 200 `[]`; `POST` → 201 with `Location: /api/alerts/1`; unsupported currency, zero target and invalid code → 400 ProblemDetails; malformed JSON → 400 plain text; `DELETE /1` → 204, then 404; `DELETE /abc` → 404. |
 
 ## Known Limitations
 
 - Exchange rates are simulated. There's no real provider.
-- There are no alert endpoints. `AlertService` implements create, list and delete, but not evaluate. `AlertRepository` implements add, list and delete, but not `ListActiveAsync` or `UpdateAsync`. Neither is registered in dependency injection.
+- Alert evaluation is not implemented: `AlertService.EvaluateAsync`, `AlertRepository.ListActiveAsync` and `UpdateAsync` throw `NotImplementedException`, and there is no `POST /api/alerts/evaluate`.
+- Error responses are not fully consistent:
+  - A malformed JSON body gets a framework `400` (in Development, a plain-text developer exception page) instead of ProblemDetails.
+  - `404` responses have an empty body.
+  - The `detail` text includes .NET's `(Parameter '…')` suffix.
+- `Location` points to `/api/alerts/{id}`, but there is no `GET` for a single alert at that URL; only `DELETE` exists there.
+- There is no frontend for alerts yet.
 - Listing returns every alert, with no paging or filtering.
 - The SQLite file path is relative to the API project folder, so run `dotnet run` and `dotnet ef` with `--project` from the repository root, as documented. Running the app from another folder would open a different, empty database.
 - SQLite stores `decimal` and `DateTimeOffset` as text, so EF Core can't filter or sort by `TargetRate` or `CreatedAt` in SQL.
@@ -275,6 +326,8 @@ Alerts that are already triggered are skipped, which is what makes them one-shot
 - A real exchange-rate provider with caching and retries.
 - PostgreSQL or SQL Server for production: switch the provider package and the `Use...()` call, regenerate the migrations, and use connection strings per environment.
 - In production, apply migrations in the deployment pipeline (SQL script or migration bundle) instead of at startup.
+- Consistent error responses: `AddProblemDetails()` would give malformed-JSON and `404` responses ProblemDetails bodies, and clean messages could be returned without the .NET parameter suffix.
+- `GET /api/alerts/{id}`, so the `Location` header points to a readable resource.
 - User accounts so each user has their own alerts.
 - Frontend tests with Vitest.
 
@@ -293,3 +346,4 @@ To be filled in manually. Claude does not estimate or record time.
 | 2026-10-21 | Automatic database initialization at startup | |
 | 2026-10-21 | Alert listing: repository and service | |
 | 2026-10-21 | Alert deletion: repository and service | |
+| 2026-10-21 | Alert CRUD endpoints | |

@@ -121,3 +121,14 @@ Important architectural decisions for RateWatch, and AI suggestions that were ac
 - **Decision:** `RateWatchApiFactory` overrides `ConnectionStrings:RateWatch` with a unique file in the temp folder for each factory instance, and deletes it on dispose.
 - **Reason:** Startup migration would otherwise make the integration tests create or change the development database. A file is used instead of in-memory SQLite, because an in-memory database disappears when the startup migration closes its connection.
 - **Source:** AI proposal, accepted by the user.
+
+## 2026-10-21 — Alert CRUD endpoints
+
+### Inline Minimal API endpoints over `IAlertService`
+- **Decision:**
+  - `POST /api/alerts`, `GET /api/alerts` and `DELETE /api/alerts/{id:int}` are Minimal API handlers inline in `Program.cs`. They call only `IAlertService`.
+  - `AlertService` and `AlertRepository` are registered as scoped, and `TimeProvider.System` as a singleton.
+  - `ArgumentException` from the entity or the service becomes a `400` ProblemDetails.
+  - Responses return `RateAlert` directly.
+- **Reason:** Three small endpoints don't justify controllers, endpoint classes, a result framework or DTO mapping. Scoped lifetimes match `AppDbContext`.
+- **Source:** User requirements (Minimal APIs, scoped DI, existing exception behavior). The handler details are AI choices, pending user review.

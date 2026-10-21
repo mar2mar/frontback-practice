@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using RateWatch.Api.Alerts;
 using RateWatch.Api.Data;
 using RateWatch.Api.Rates;
 
@@ -9,6 +10,10 @@ builder.Services.AddDbContext<AppDbContext>(
 
 builder.Services.AddSingleton<IExchangeRateProvider>(
     _ => new FakeExchangeRateProvider(TimeProvider.System, Random.Shared));
+
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddScoped<IAlertRepository, AlertRepository>();
+builder.Services.AddScoped<IAlertService, AlertService>();
 
 var app = builder.Build();
 
@@ -27,5 +32,24 @@ app.MapGet("/api/rates", async (IExchangeRateProvider provider, CancellationToke
         ? Results.Problem($"Unsupported base currency '{@base}'.", statusCode: StatusCodes.Status400BadRequest)
         : Results.Ok(snapshot);
 });
+
+app.MapPost("/api/alerts", async (CreateAlertRequest request, IAlertService alerts, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var alert = await alerts.CreateAsync(request.BaseCurrency, request.QuoteCurrency, request.TargetRate, cancellationToken);
+        return Results.Created($"/api/alerts/{alert.Id}", alert);
+    }
+    catch (ArgumentException ex) // invalid or unsupported currency, non-positive target rate
+    {
+        return Results.Problem(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+    }
+});
+
+app.MapGet("/api/alerts", async (IAlertService alerts, CancellationToken cancellationToken) =>
+    Results.Ok(await alerts.ListAsync(cancellationToken)));
+
+app.MapDelete("/api/alerts/{id:int}", async (int id, IAlertService alerts, CancellationToken cancellationToken) =>
+    await alerts.DeleteAsync(id, cancellationToken) ? Results.NoContent() : Results.NotFound());
 
 app.Run();
