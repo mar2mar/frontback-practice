@@ -191,3 +191,17 @@ Important architectural decisions for RateWatch, and AI suggestions that were ac
   - Provider failures are left unhandled on purpose, as decided for the service.
 - **Trade-off:** a provider failure surfaces as an unhandled `500` without a ProblemDetails body. A global exception handler is left as a future improvement.
 - **Source:** User specification. The AI implemented it with no extra choices beyond moving the test-only `AlertResponse` record into a shared file.
+
+## 2026-10-21 — Frontend integration
+
+### Frontend testing with Vitest
+- **Decision:**
+  - Add `vitest`, `@vue/test-utils` and `jsdom` as dev dependencies. The `test` block in `vite.config.js` sets `environment: 'jsdom'`, and `npm test` runs `vitest run` (no watch mode).
+  - Tests stub `fetch` with `vi.stubGlobal`.
+  - Test files sit next to their component.
+- **Reason:**
+  - Vitest reuses the existing Vite and Vue setup, so there's no separate build or test configuration.
+  - Stubbing `fetch` matches how the components already make requests, so there's no mock server and no API client abstraction.
+- **Source:**
+  - Adding Vitest, Vue Test Utils and jsdom was the user's decision (frontend plan, Commit 1).
+  - Stubbing `fetch` and putting tests next to components are AI choices, accepted by the user.

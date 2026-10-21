@@ -56,6 +56,15 @@ dotnet tool restore   # installs the pinned dotnet-ef (.config/dotnet-tools.json
 - The connection string (`ConnectionStrings:RateWatch` in `appsettings.json`) is `Data Source=ratewatch.db`, a path relative to the API project folder. Both `dotnet run --project` and `dotnet ef --project` use that folder, so they open the same file.
 - The database file is git-ignored (`*.db`).
 
+## Running Tests
+
+From the repository root:
+
+```powershell
+dotnet test                       # backend: unit, SQLite persistence and HTTP integration tests
+cd frontend; npm install; npm test   # frontend: Vitest, single run (no watch mode)
+```
+
 ## Business Rules and Assumptions
 
 - Alerts are **above-threshold only**. There are no "below" alerts.
@@ -236,7 +245,7 @@ All planned endpoints are implemented.
   - Responses return `RateAlert` directly, with no response DTO, which matches how `/api/rates` returns `RateSnapshot`.
   - The `POST` handler catches `ArgumentException`, which also covers `ArgumentOutOfRangeException`, and returns a `400` ProblemDetails. This reuses the existing exception behavior; there's no result-type framework.
 - **Not used:** CQRS, MediatR, controllers or mapping libraries.
-- **Frontend:** Vue 3 and Vite (JavaScript). The Vite dev proxy forwards `/api` to the backend, so no CORS setup is needed.
+- **Frontend:** Vue 3 and Vite (JavaScript). The Vite dev proxy forwards `/api` to the backend, so no CORS setup is needed. Components call `fetch` directly with relative `/api` URLs. There's no router, store, API client or UI library.
 
 ### Persistence: SQLite and EF Core
 
@@ -316,6 +325,7 @@ Rates aren't stored in the database. Evaluation always uses the provider's curre
 | 32 | The fake repository's `TryMarkTriggeredAsync` records calls and returns a value set by the test (default `true`) | Accepted | Same pattern as accepted decision 26: fake alerts have no IDs. Setting it to `false` lets service tests simulate losing a concurrent race. |
 | 33 | `EvaluateAsync` fetches one snapshot per distinct base currency, one base at a time | Accepted (adjusted by the user) | Final design: two phases. Fetch every snapshot first, then evaluate and save in active-alert order. That way a provider failure saves nothing. The AI's original version fetched lazily inside the loop, which could leave alerts triggered but unreported. Parallel calls aren't needed for the in-process fake provider. |
 | 34 | Provider exceptions are not caught in `EvaluateAsync` | Accepted | A failing provider is a real error, not a missing rate (which is skipped). Catching it would hide outages. Because of decision 33, it fails before anything is saved. |
+| 35 | Frontend tests stub `fetch` with `vi.stubGlobal` (no mock-server library), and test files sit next to their component (`src/*.test.js`) | Accepted | Components already call `fetch` directly, so stubbing it is the smallest seam. Test files next to their component need no extra configuration and are excluded from the bundle automatically. |
 
 ## Testing Strategy
 
@@ -324,6 +334,10 @@ Rates aren't stored in the database. Evaluation always uses the provider's curre
 - **Unit tests:** domain behavior (`RateAlertTests`), `AlertService` (`AlertServiceTests`, using `FakeAlertRepository` and `StubExchangeRateProvider`, which records the base currencies it was asked for in `RequestedBases`) and the fake provider, using a deterministic `Random`, `FixedTimeProvider` and zero volatility where needed.
 - **Integration tests:** `RateWatchApiFactory`, a `WebApplicationFactory<Program>` that overrides `ConnectionStrings:RateWatch` with a temporary SQLite file for each factory instance. `StubExchangeRateProvider` is swapped in where exact rates matter. `DatabaseStartupTests` checks that startup migrates a fresh database and that a restart keeps existing alerts. `AlertsEndpointTests` creates a new factory in each test, so each test starts with an empty database. It checks only HTTP behavior: status codes, `Location`, JSON shape, and that changes are saved. The validation rules themselves are covered by the unit tests.
 - **Persistence tests:** `AlertRepositoryTests`. Each test class instance gets its own in-memory SQLite database, built with the real migrations. Data is read back through a separate `AppDbContext`, so the test checks what was actually stored.
+- **Frontend tests:**
+  - Vitest 5, `@vue/test-utils` 2 and jsdom; `npm test` runs `vitest run` (single run, no watch mode).
+  - Components are mounted with `fetch` stubbed through `vi.stubGlobal`, and `flushPromises()` waits for the async calls.
+  - So far there's one smoke test, `src/App.test.js`: the rates view requests `/api/rates?base=USD` on mount and renders the returned rates and the "Last updated" line.
 - **Evaluate endpoint tests:** `EvaluateEndpointTests` creates a new app and SQLite database for each test, with a deterministic `StubExchangeRateProvider` (USD → EUR 0.92, GBP 0.79, JPY 150) in place of the random fake provider. It covers:
   - no alerts → `[]`;
   - a triggered alert returned with its real `id` and `triggeredAt`;
@@ -350,6 +364,7 @@ Rates aren't stored in the database. Evaluation always uses the provider's curre
 | 2026-10-21 | Evaluation step 2: `ListActiveAsync` and `TryMarkTriggeredAsync` (TDD) | Red: 4 of 4 new SQLite tests failed with `NotImplementedException`. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 55 of 55 passed. The development database was unchanged. Review follow-up: added `OrderBy(Id)` to `ListActiveAsync` and extended its test to three alerts with the middle one triggered, then 55 of 55 passed. The ordering test couldn't be shown failing first, because SQLite already returns rows in insertion order; it guards against a future regression. The fake's `ListActiveAsync` now returns detached copies. |
 | 2026-10-21 | Evaluation step 3: `AlertService.EvaluateAsync` (TDD) | Red: 6 of 6 new service tests failed with `NotImplementedException`. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 61 of 61 passed. Review refinement (two phases): the new provider-failure test failed against the one-loop version (`Assert.Empty() Failure`: the USD alert was already saved when the EUR fetch threw). After the refactor, `dotnet build` had 0 warnings and 0 errors, and `dotnet test` passed 62 of 62, with the existing order and one-call-per-base tests unchanged. |
 | 2026-10-21 | Evaluation step 4: `POST /api/alerts/evaluate` (TDD) | Red: 5 of 5 new HTTP tests failed with `405 MethodNotAllowed`, because no `POST` handler existed. The path matched the `DELETE /api/alerts/{id:int}` pattern, so ASP.NET Core reported the wrong method instead of 404. The 6 existing CRUD endpoint tests still passed after moving `AlertResponse` to its own file. Green: `dotnet build` 0 warnings, 0 errors. `dotnet test`: 67 of 67 passed. The development database was unchanged and no temporary test files were left behind. Manual check with the random fake provider and a throwaway database: evaluate with no alerts → `[]`; then alerts EUR 0.5 and GBP 5 → evaluate returned only EUR; evaluate again → `[]`; `GET` showed EUR's `triggeredAt` unchanged and GBP still active. |
+| 2026-10-21 | Frontend testing setup | Installed `vitest` 5.0.5, `@vue/test-utils` 2.5.1 and `jsdom` 30.1.3 as dev dependencies. `npm audit`: 0 vulnerabilities, with no peer-dependency warnings. The lockfile also moved `vite` from 8.3.4 to 8.3.5, within the existing range. `npm test`: 1 of 1 passed. This smoke test describes existing behavior, so it passed on first run with no red phase. `npm run build` succeeded, with output identical to before, so the test files aren't bundled. |
 
 ## Known Limitations
 
@@ -374,7 +389,7 @@ Rates aren't stored in the database. Evaluation always uses the provider's curre
 - `RateAlert` checks the format of currency codes, but not whether a code is a real ISO 4217 currency (e.g. `ABC` is accepted). The service will check that currencies are supported.
 - Evaluation only happens when requested. Alerts don't trigger on their own.
 - There are no users, authentication or notifications.
-- There are no frontend tests. The UI is checked by hand.
+- Frontend tests cover only a smoke test of the rates view so far. Alert UI is not built yet.
 
 ## Future Improvements
 
@@ -387,7 +402,6 @@ Rates aren't stored in the database. Evaluation always uses the provider's curre
 - Consistent error responses: `AddProblemDetails()` would give malformed-JSON and `404` responses ProblemDetails bodies, and clean messages could be returned without the .NET parameter suffix.
 - `GET /api/alerts/{id}`, so the `Location` header points to a readable resource.
 - User accounts so each user has their own alerts.
-- Frontend tests with Vitest.
 
 ## Time Tracking
 
@@ -409,3 +423,4 @@ To be filled in manually. Claude does not estimate or record time.
 | 2026-10-21 | Evaluation step 2: repository conditional persistence | |
 | 2026-10-21 | Evaluation step 3: `AlertService.EvaluateAsync` | |
 | 2026-10-21 | Evaluation step 4: `POST /api/alerts/evaluate` | |
+| 2026-10-21 | Frontend testing setup | |
